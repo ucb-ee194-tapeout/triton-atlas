@@ -1,0 +1,30 @@
+#!/bin/sh
+# Catches what a commit made with --no-verify skipped. Clear mistakes block the push, because they can't be taken back
+# once pushed. It only checks: a push can't change existing commits, so formatters don't run here.
+root="$(git rev-parse --show-toplevel)"
+tool="$root/.venv/bin/pre-commit"
+[ -x "$tool" ] || tool="$(command -v pre-commit)" || exit 0
+
+for check in detect-private-key check-merge-conflict check-ast check-yaml check-toml; do
+    report="$("$tool" run "$check" --all-files 2>&1)"
+    status=$?
+    # 3 means pre-commit itself couldn't run, for example fetching its tools with no network: not a mistake in the files.
+    if [ "$status" -eq 3 ]; then
+        printf '%s\n' "$report"
+        echo "format hook: pre-commit couldn't run, skipping"
+        exit 0
+    fi
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$report"
+        echo "format hook: push stopped by $check; fix it, or use --no-verify if it is wrong"
+        exit 1
+    fi
+done
+
+for check in ruff shellcheck; do
+    if ! report="$("$tool" run "$check" --all-files 2>&1)"; then
+        printf '%s\n' "$report" | grep -v -E '\.\.\.(Passed|Skipped)$|no files to check'
+        echo "format hook: see above; pushing anyway"
+    fi
+done
+exit 0

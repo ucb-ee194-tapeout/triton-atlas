@@ -1,0 +1,49 @@
+# The tools .githooks/ runs. Hooks and versions follow triton v3.9.0 .pre-commit-config.yaml, so our style matches
+# Triton's. Run them by hand with: pre-commit run --all-files
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-symlinks
+      - id: destroyed-symlinks
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-ast
+      # Without these flags, each check only runs on files newly added or during a merge.
+      - id: check-added-large-files
+        args: ["--enforce-all"]
+      - id: check-merge-conflict
+        args: ["--assume-in-merge"]
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: detect-private-key
+      - id: debug-statements
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.1
+    hooks:
+      # Lint only: unlike Triton, no --fix, because it deletes code such as unused imports.
+      - id: ruff
+
+  - repo: https://github.com/google/yapf
+    rev: "v0.43.0"
+    hooks:
+      - id: yapf
+        args: ["-p", "-i"]
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v19.1.6
+    hooks:
+      - id: clang-format
+
+  - repo: https://github.com/BlankSpruce/gersemi
+    rev: "0.19.3"
+    hooks:
+      - id: gersemi
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck

@@ -1,0 +1,56 @@
+#!/bin/sh
+# Formats the files being committed and adds the result to the commit. Only clear mistakes block it: a private key,
+# merge markers or a syntax error. A lint warning or an oversized file is printed and the commit goes ahead.
+# pre-commit itself fails whenever a formatter changes a file, so its exit status is ignored for formatting.
+root="$(git rev-parse --show-toplevel)"
+tool="$root/.venv/bin/pre-commit"
+[ -x "$tool" ] || tool="$(command -v pre-commit)" || {
+    echo "format hook: pre-commit not found, skipping"
+    exit 0
+}
+
+# File lists are split on newlines only, so names may contain spaces.
+IFS='
+'
+set -f
+
+files="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -n "$files" ] || exit 0
+unstaged="$(git diff --name-only)"
+
+for check in detect-private-key check-merge-conflict check-ast check-yaml check-toml; do
+    # shellcheck disable=SC2086 # the file list is meant to split
+    report="$("$tool" run "$check" --files $files 2>&1)"
+    status=$?
+    # 3 means pre-commit itself couldn't run, for example fetching its tools with no network: not a mistake in the files.
+    if [ "$status" -eq 3 ]; then
+        printf '%s\n' "$report"
+        echo "format hook: pre-commit couldn't run, skipping"
+        exit 0
+    fi
+    if [ "$status" -ne 0 ]; then
+        printf '%s\n' "$report"
+        echo "format hook: commit stopped by $check; fix it, or use --no-verify if it is wrong"
+        exit 1
+    fi
+done
+
+# The first run fixes files; a failure on the second is a real problem, and only that gets printed.
+# shellcheck disable=SC2086 # the file list is meant to split
+"$tool" run --files $files >/dev/null 2>&1
+# shellcheck disable=SC2086
+if ! report="$("$tool" run --files $files 2>&1)"; then
+    printf '%s\n' "$report" | grep -v -E '\.\.\.(Passed|Skipped)$|no files to check'
+    echo "format hook: see above; committing anyway"
+fi
+
+for file in $files; do
+    [ -f "$file" ] || continue
+    # Adding a partly staged file would commit the parts left out on purpose, so leave it for the next commit.
+    if printf '%s\n' "$unstaged" | grep -Fxq "$file"; then
+        echo "format hook: $file has unstaged changes, so its formatting isn't in this commit"
+    else
+        git add -- "$file"
+    fi
+done
+exit 0
