@@ -21,14 +21,48 @@ if(NOT _triton_found EQUAL 0 OR NOT EXISTS "${TRITON_WHEEL_DIR}/include/triton/T
   message(FATAL_ERROR "No Triton wheel with plugin headers found by ${Python_EXECUTABLE}")
 endif()
 
-# LLVM: headers, TableGen and CMake modules only. It must be the commit Triton was built with (scripts/build.sh checks).
+# LLVM: headers, TableGen and CMake modules only. It must be the commit Triton was built with (checked below).
 if(NOT LLVM_INSTALL_DIR)
   set(LLVM_INSTALL_DIR "$ENV{LLVM_INSTALL_DIR}")
 endif()
 if(NOT LLVM_INSTALL_DIR)
   message(FATAL_ERROR "Set LLVM_INSTALL_DIR to an LLVM install; see scripts/build.sh")
 endif()
+# Forget a previous LLVM, so changing LLVM_INSTALL_DIR in an existing build folder takes effect.
+unset(MLIR_DIR CACHE)
+unset(LLVM_DIR CACHE)
 find_package(MLIR REQUIRED CONFIG PATHS "${LLVM_INSTALL_DIR}/lib/cmake/mlir" NO_DEFAULT_PATH)
+
+# Take Triton's requirements from the Triton we link: libtriton carries LLVM's own version line, and Version.h names
+# the release. Nothing here needs updating when Triton moves.
+file(STRINGS "${TRITON_LIB}" _triton_llvm REGEX "LLVM version [0-9.a-z]+ \\([0-9a-f]+\\)" LIMIT_COUNT 1)
+string(REGEX MATCH "\\(([0-9a-f]+)\\)" _ "${_triton_llvm}")
+set(TRITON_LLVM_COMMIT "${CMAKE_MATCH_1}")
+file(STRINGS "${LLVM_INCLUDE_DIR}/llvm/Support/VCSRevision.h" _llvm_revision REGEX "define LLVM_REVISION")
+string(REGEX MATCH "\"\\(?([0-9a-f]+)\\)?\"" _ "${_llvm_revision}") # plain or raw string, depending on the LLVM build
+set(HAVE_LLVM_COMMIT "${CMAKE_MATCH_1}")
+if(NOT TRITON_LLVM_COMMIT OR NOT TRITON_LLVM_COMMIT STREQUAL HAVE_LLVM_COMMIT)
+  message(FATAL_ERROR "${LLVM_INSTALL_DIR} is LLVM '${HAVE_LLVM_COMMIT}', but ${TRITON_LIB} was built with "
+                      "'${TRITON_LLVM_COMMIT}'")
+endif()
+
+# If the optional Triton checkout is here, it must be the release we link. The source says so itself; a shallow
+# checkout has no tags to ask.
+set(_triton_init "${CMAKE_CURRENT_SOURCE_DIR}/third_party/triton/python/triton/__init__.py")
+if(EXISTS "${_triton_init}")
+    file(STRINGS "${TRITON_WHEEL_DIR}/include/triton/Version.h" _triton_version REGEX "define TRITON_VERSION \"")
+    string(REGEX MATCH "\"([^\"+]+)" _ "${_triton_version}")
+    set(TRITON_RELEASE "${CMAKE_MATCH_1}")
+    file(STRINGS "${_triton_init}" _triton_source REGEX "^__version__ = ")
+    string(REGEX MATCH "'([^'+]+)" _ "${_triton_source}")
+    set(TRITON_SOURCE_RELEASE "${CMAKE_MATCH_1}")
+    if(NOT TRITON_SOURCE_RELEASE STREQUAL TRITON_RELEASE)
+        message(
+            FATAL_ERROR
+            "third_party/triton is ${TRITON_SOURCE_RELEASE}, but the installed Triton is ${TRITON_RELEASE}"
+        )
+    endif()
+endif()
 
 # The flag changes the mangled type of every ilist_iterator, and libtriton is built with it on. A mismatch only shows
 # up as undefined symbols when Python loads the plugin.
