@@ -20,6 +20,8 @@ atlas = "triton_atlas_backend"
 [tool.scikit-build]
 cmake.version = ">=3.20"
 cmake.build-type = "Release"
+# Only our plugin: atlas-mlir's own install rules would add its tools.
+install.components = ["plugin"]
 wheel.exclude = ["**/__pycache__/**", "**/*.pyc"]
 
 [tool.scikit-build.wheel.packages]
