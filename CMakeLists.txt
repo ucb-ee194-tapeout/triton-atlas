@@ -133,5 +133,12 @@ target_link_libraries(
 
 # clangd finds compile_commands.json at the repo root with no settings. Triton's setup.py links it the same way.
 file(CREATE_LINK "${CMAKE_BINARY_DIR}/compile_commands.json" "${CMAKE_SOURCE_DIR}/compile_commands.json" SYMBOLIC)
+# The VS Code MLIR extension looks in build/ for this one, and its database setting doesn't expand ${workspaceFolder}.
+file(
+    CREATE_LINK
+        "${CMAKE_BINARY_DIR}/tablegen_compile_commands.yml"
+        "${CMAKE_BINARY_DIR}/../tablegen_compile_commands.yml"
+    SYMBOLIC
+)
 
 install(TARGETS TritonAtlasBackend LIBRARY DESTINATION triton_atlas_backend COMPONENT plugin)
