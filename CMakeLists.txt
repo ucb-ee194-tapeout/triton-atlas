@@ -38,16 +38,28 @@ if(NOT _llvm_abi)
   message(FATAL_ERROR "${LLVM_INSTALL_DIR} needs LLVM_ENABLE_ABI_BREAKING_CHECKS=1 to match libtriton")
 endif()
 
+list(APPEND CMAKE_MODULE_PATH ${MLIR_CMAKE_DIR} ${LLVM_CMAKE_DIR})
+include(TableGen)
+include(AddLLVM)
+include(AddMLIR)
+include_directories(${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
+
 # atlas-mlir (pinned submodule) builds with its own CMake; EXCLUDE_FROM_ALL builds only the library we link.
 add_subdirectory(third_party/atlas-mlir ${CMAKE_CURRENT_BINARY_DIR}/atlas-mlir EXCLUDE_FROM_ALL)
 
+# Our own passes: declarations in include/, TableGen output in the build folder.
+add_subdirectory(include)
+
 add_library(TritonAtlasBackend SHARED plugin.cpp)
-add_dependencies(TritonAtlasBackend MLIRAtlas)
+add_dependencies(TritonAtlasBackend MLIRAtlas TritonToAtlasVirtualPassIncGen)
 set_target_properties(TritonAtlasBackend PROPERTIES OUTPUT_NAME triton_atlas_backend)
+add_subdirectory(lib)
 target_include_directories(TritonAtlasBackend SYSTEM PRIVATE
   ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} "${TRITON_WHEEL_DIR}/include")
 # atlas-mlir sets its include paths per folder, not on MLIRAtlas, so name them here (headers + TableGen output).
 target_include_directories(TritonAtlasBackend PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/atlas-mlir/include
   ${CMAKE_CURRENT_BINARY_DIR}/atlas-mlir/include)
 target_compile_options(TritonAtlasBackend PRIVATE

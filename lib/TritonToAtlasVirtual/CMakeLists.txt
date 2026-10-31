@@ -1,0 +1,3 @@
+target_sources(TritonAtlasBackend PRIVATE
+  ConvertTritonToAtlasVirtual.cpp
+  Pipeline.cpp)

@@ -1,11 +1,13 @@
 // Entry point of the Atlas plugin: Triton loads this library and calls tritonGetPluginInfo() to learn what it adds
 // (triton v3.9.0 include/triton/Tools/PluginUtils.h). Written by hand, as triton-lang/triton-ext@268252b
-// backend/AppleGPU/ExportAppleGPU.cpp does (MIT). Our passes get listed here once they exist.
+// backend/AppleGPU/ExportAppleGPU.cpp does (MIT).
 #include "Atlas/AtlasDialect.h"
+#include "TritonToAtlasVirtual/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectRegistry.h"
+#include "mlir/Pass/PassManager.h"
 #include "triton/Tools/PluginUtils.h"
 #include "triton/Version.h"
 
@@ -21,7 +23,17 @@ static void registerAtlasDialects(mlir::DialectRegistry *registry) {
   mlir::func::registerInlinerExtension(*registry);
 }
 
+// Python sees this as passes.plugin.add_atlas_virtual_pipeline(pm). The callback gets the whole PassManager, so one
+// call adds our full pipeline.
+static void addAtlasVirtualPipeline(mlir::PassManager *pm, const std::vector<std::string> &) {
+  buildTritonToAtlasVirtualPipeline(*pm);
+}
+
 TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
+  static plugin::PassInfo passes[] = {
+      {"atlas_virtual_pipeline", "0.1.0", addAtlasVirtualPipeline, registerTritonToAtlasVirtualPasses},
+  };
+
   static plugin::DialectInfo dialects[] = {
       {"atlas", "0.1.0", registerAtlasDialects},
   };
@@ -30,8 +42,8 @@ TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
       TRITON_PLUGIN_API_VERSION,
       "TritonAtlasBackend",
       "0.1.0",
-      nullptr,
-      0, // numPasses
+      passes,
+      std::size(passes),
       dialects,
       std::size(dialects),
       nullptr,

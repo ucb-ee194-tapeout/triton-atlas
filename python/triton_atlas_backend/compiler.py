@@ -5,8 +5,8 @@
 # make_ttir follows Triton's two backends, NVIDIA and AMD, pass for pass (see the comment there). A line marked
 # "Atlas:" is where we differ from them; every other line is theirs.
 #
-# Stub for now: the "atlas_virtual" stage only tags the TTIR text. Our TTIR -> Atlas virtual ops passes replace it
-# in phase 1 of the plan; run mode (lowering to program.bin) comes in phase 2.
+# The "atlas_virtual" stage runs our C++ pipeline. Its pass is empty for now, so the output is still TTIR; the rewriting
+# comes in phase 1 of the plan. Run mode (lowering to program.bin) comes in phase 2.
 import dataclasses
 import hashlib
 
@@ -127,11 +127,14 @@ class AtlasBackend(BaseBackend):
 
     @staticmethod
     def make_atlas_virtual(mod, metadata, options):
-        # Stand-in for our TTIR -> Atlas virtual ops passes: keeps the TTIR text, tagged.
         text = str(mod)
         metadata["name"] = next(line for line in text.splitlines() if "tt.func" in line).split("@")[1].split("(")[0]
         metadata["shared"] = 0
-        return "// atlas stub: TTIR, not yet Atlas virtual ops\n" + text
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        passes.plugin.add_atlas_virtual_pipeline(pm)
+        pm.run(mod, "make_atlas_virtual")
+        return str(mod)
 
     def add_stages(self, stages, options, language):
         if language != Language.TRITON:
