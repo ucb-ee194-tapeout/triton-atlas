@@ -1,7 +1,8 @@
 # The Atlas backend for Triton as a wheel: a Python package plus a plugin .so, built against the stock Triton wheel.
 # Layout follows triton-lang/triton-ext@268252b backend/AppleGPU/pyproject.toml (MIT).
 [build-system]
-requires = ["scikit-build-core>=0.10", "cmake>=3.20", "ninja"]
+# triton is here because CMake reads its headers and libtriton from the wheel.
+requires = ["scikit-build-core>=0.10", "cmake>=3.20", "ninja", "triton==3.9.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -20,6 +21,8 @@ atlas = "triton_atlas_backend"
 [tool.scikit-build]
 cmake.version = ">=3.20"
 cmake.build-type = "Release"
+# The plugin has no Python extension code, so one wheel fits every Python version we support.
+wheel.py-api = "py3"
 # Only our plugin: atlas-mlir's own install rules would add its tools.
 install.components = ["plugin"]
 wheel.exclude = ["**/__pycache__/**", "**/*.pyc"]
