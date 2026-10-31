@@ -47,3 +47,6 @@ repos:
     rev: v0.10.0.1
     hooks:
       - id: shellcheck
+
+# License texts stay byte-for-byte as their authors wrote them.
+exclude: ^(LICENSE$|THIRD_PARTY_LICENSES/)

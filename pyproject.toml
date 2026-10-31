@@ -2,7 +2,7 @@
 # Layout follows triton-lang/triton-ext@268252b backend/AppleGPU/pyproject.toml (MIT).
 [build-system]
 # triton is here because CMake reads its headers and libtriton from the wheel.
-requires = ["scikit-build-core>=0.10", "cmake>=3.20", "ninja", "triton==3.9.0"]
+requires = ["scikit-build-core>=0.11", "cmake>=3.20", "ninja", "triton==3.9.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -10,6 +10,9 @@ name = "triton-atlas-backend"
 version = "0.1.0"
 description = "Atlas backend for Triton"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+# atlas-mlir is compiled into our library, and parts of our code derive from Triton and triton-ext.
+license-files = ["LICENSE", "THIRD_PARTY_LICENSES/*"]
 # The plugin is built against this Triton's headers and LLVM, and Triton's loader refuses a plugin built for another
 # version (triton v3.9.0 lib/Tools/PluginUtils.cpp:17-29, 60-64), so pip must install exactly this one.
 dependencies = ["triton==3.9.0"]
