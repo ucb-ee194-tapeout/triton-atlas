@@ -1,0 +1,26 @@
+# The Atlas backend for Triton as a wheel: a Python package plus a plugin .so, built against the stock Triton wheel.
+# Layout follows triton-lang/triton-ext@268252b backend/AppleGPU/pyproject.toml (MIT).
+[build-system]
+requires = ["scikit-build-core>=0.10", "cmake>=3.20", "ninja"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "triton-atlas-backend"
+version = "0.1.0"
+description = "Atlas backend for Triton"
+requires-python = ">=3.12"
+# The plugin is built against this Triton's headers and LLVM, and Triton's loader refuses a plugin built for another
+# version (triton v3.9.0 lib/Tools/PluginUtils.cpp:17-29, 60-64), so pip must install exactly this one.
+dependencies = ["triton==3.9.0"]
+
+# How Triton finds us (triton v3.9.0 python/triton/backends/__init__.py:57-62).
+[project.entry-points."triton.backends"]
+atlas = "triton_atlas_backend"
+
+[tool.scikit-build]
+cmake.version = ">=3.20"
+cmake.build-type = "Release"
+wheel.exclude = ["**/__pycache__/**", "**/*.pyc"]
+
+[tool.scikit-build.wheel.packages]
+triton_atlas_backend = "python/triton_atlas_backend"
