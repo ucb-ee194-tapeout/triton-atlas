@@ -99,6 +99,7 @@ add_library(TritonAtlasBackend SHARED plugin.cpp)
 add_dependencies(TritonAtlasBackend MLIRAtlas TritonToAtlasVirtualPassIncGen)
 set_target_properties(TritonAtlasBackend PROPERTIES OUTPUT_NAME triton_atlas_backend)
 add_subdirectory(lib)
+add_subdirectory(tools)
 target_include_directories(
     TritonAtlasBackend
     SYSTEM

@@ -1,0 +1,29 @@
+# The language server built from the Triton submodule, which adds every upstream MLIR dialect. A wrapper project, so
+# Triton stays unpatched: it builds Triton and atlas-mlir side by side, then links the server to both.
+cmake_minimum_required(VERSION 3.22)
+project(triton_atlas_lsp LANGUAGES C CXX)
+
+# Triton finds MLIR in its own scope, so find it here too for the server's headers.
+find_package(MLIR REQUIRED CONFIG)
+
+get_filename_component(_repo "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+add_subdirectory("${_repo}/third_party/triton" triton)
+get_property(_triton_libs GLOBAL PROPERTY TRITON_LIBS)
+add_subdirectory("${_repo}/third_party/atlas-mlir" atlas-mlir EXCLUDE_FROM_ALL)
+
+add_executable(triton-atlas-lsp EXCLUDE_FROM_ALL "${_repo}/tools/triton-atlas-lsp.cpp")
+set_target_properties(triton-atlas-lsp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+target_compile_definitions(triton-atlas-lsp PRIVATE TRITON_ATLAS_LSP_ALL_DIALECTS)
+target_compile_options(triton-atlas-lsp PRIVATE -fno-rtti -fno-exceptions)
+target_include_directories(
+    triton-atlas-lsp
+    PRIVATE
+        ${MLIR_INCLUDE_DIRS}
+        ${LLVM_INCLUDE_DIRS}
+        "${_repo}/third_party/triton/include"
+        "${CMAKE_BINARY_DIR}/triton/include"
+        "${_repo}/third_party/atlas-mlir/include"
+        "${CMAKE_BINARY_DIR}/atlas-mlir/include"
+)
+add_dependencies(triton-atlas-lsp TritonTableGen TritonGPUTableGen)
+target_link_libraries(triton-atlas-lsp PRIVATE MLIRAtlas ${_triton_libs} MLIRLspServerLib MLIRRegisterAllDialects)
