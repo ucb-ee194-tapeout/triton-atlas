@@ -131,4 +131,7 @@ target_link_libraries(
         -Wl,--as-needed
 )
 
+# clangd finds compile_commands.json at the repo root with no settings. Triton's setup.py links it the same way.
+file(CREATE_LINK "${CMAKE_BINARY_DIR}/compile_commands.json" "${CMAKE_SOURCE_DIR}/compile_commands.json" SYMBOLIC)
+
 install(TARGETS TritonAtlasBackend LIBRARY DESTINATION triton_atlas_backend COMPONENT plugin)
