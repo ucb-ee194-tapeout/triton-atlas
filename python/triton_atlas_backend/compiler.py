@@ -72,8 +72,9 @@ class AtlasBackend(BaseBackend):
         return {}
 
     def load_dialects(self, context):
-        from triton._C.libtriton import atlas
-        atlas.load_dialects(context)
+        # Nothing to do: Triton loads plugin dialects itself (extend_dialects_with in __init__.py;
+        # triton v3.9.0 python/src/ir.cc:360-366).
+        pass
 
     # Upstream Triton has two backends, and their TTIR lists agree in order (triton v3.9.0): NVIDIA
     # third_party/nvidia/backend/compiler.py:285-298, AMD third_party/amd/backend/compiler.py:443-457.
