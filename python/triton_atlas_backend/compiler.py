@@ -13,6 +13,8 @@ import hashlib
 from triton._C.libtriton import ir, passes
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 
+from . import PACKAGE_DIR, PLUGIN_LIBRARY
+
 
 @dataclasses.dataclass(frozen=True)
 class AtlasOptions:
@@ -52,7 +54,12 @@ class AtlasBackend(BaseBackend):
         self.binary_ext = "atlas_virtual"
 
     def hash(self) -> str:
-        return f"atlas-{self.target.arch}-stub-0"
+        # Triton's cache key covers only Triton's own package (triton v3.9.0 python/triton/runtime/cache.py:284-315),
+        # so without this an edited .py or a rebuilt plugin silently reuses the old cached kernel.
+        digest = hashlib.sha256()
+        for path in [*sorted(PACKAGE_DIR.glob("*.py")), PLUGIN_LIBRARY]:
+            digest.update(path.read_bytes())
+        return f"atlas-{self.target.arch}-{digest.hexdigest()}"
 
     def parse_options(self, options: dict) -> object:
         args = {k: v for k, v in options.items() if k in AtlasOptions.__dataclass_fields__}
