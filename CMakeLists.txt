@@ -13,20 +13,24 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # The installed Triton wheel: headers in include/, libtriton in _C/.
 find_package(Python COMPONENTS Interpreter REQUIRED)
 execute_process(
-  COMMAND ${Python_EXECUTABLE} -c
-          "import importlib.util; print(importlib.util.find_spec('triton').submodule_search_locations[0])"
-  OUTPUT_VARIABLE TRITON_WHEEL_DIR OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _triton_found)
+    COMMAND
+        ${Python_EXECUTABLE} -c
+        "import importlib.util; print(importlib.util.find_spec('triton').submodule_search_locations[0])"
+    OUTPUT_VARIABLE TRITON_WHEEL_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _triton_found
+)
 set(TRITON_LIB "${TRITON_WHEEL_DIR}/_C/libtriton.so")
 if(NOT _triton_found EQUAL 0 OR NOT EXISTS "${TRITON_WHEEL_DIR}/include/triton/Tools/PluginUtils.h")
-  message(FATAL_ERROR "No Triton wheel with plugin headers found by ${Python_EXECUTABLE}")
+    message(FATAL_ERROR "No Triton wheel with plugin headers found by ${Python_EXECUTABLE}")
 endif()
 
 # LLVM: headers, TableGen and CMake modules only. It must be the commit Triton was built with (checked below).
 if(NOT LLVM_INSTALL_DIR)
-  set(LLVM_INSTALL_DIR "$ENV{LLVM_INSTALL_DIR}")
+    set(LLVM_INSTALL_DIR "$ENV{LLVM_INSTALL_DIR}")
 endif()
 if(NOT LLVM_INSTALL_DIR)
-  message(FATAL_ERROR "Set LLVM_INSTALL_DIR to an LLVM install; see scripts/build.sh")
+    message(FATAL_ERROR "Set LLVM_INSTALL_DIR to an LLVM install; see scripts/build.sh")
 endif()
 # Forget a previous LLVM, so changing LLVM_INSTALL_DIR in an existing build folder takes effect.
 unset(MLIR_DIR CACHE)
@@ -42,8 +46,11 @@ file(STRINGS "${LLVM_INCLUDE_DIR}/llvm/Support/VCSRevision.h" _llvm_revision REG
 string(REGEX MATCH "\"\\(?([0-9a-f]+)\\)?\"" _ "${_llvm_revision}") # plain or raw string, depending on the LLVM build
 set(HAVE_LLVM_COMMIT "${CMAKE_MATCH_1}")
 if(NOT TRITON_LLVM_COMMIT OR NOT TRITON_LLVM_COMMIT STREQUAL HAVE_LLVM_COMMIT)
-  message(FATAL_ERROR "${LLVM_INSTALL_DIR} is LLVM '${HAVE_LLVM_COMMIT}', but ${TRITON_LIB} was built with "
-                      "'${TRITON_LLVM_COMMIT}'")
+    message(
+        FATAL_ERROR
+        "${LLVM_INSTALL_DIR} is LLVM '${HAVE_LLVM_COMMIT}', but ${TRITON_LIB} was built with "
+        "'${TRITON_LLVM_COMMIT}'"
+    )
 endif()
 
 # If the optional Triton checkout is here, it must be the release we link. The source says so itself; a shallow
@@ -66,10 +73,14 @@ endif()
 
 # The flag changes the mangled type of every ilist_iterator, and libtriton is built with it on. A mismatch only shows
 # up as undefined symbols when Python loads the plugin.
-file(STRINGS "${LLVM_INCLUDE_DIR}/llvm/Config/abi-breaking.h" _llvm_abi
-     REGEX "^#define LLVM_ENABLE_ABI_BREAKING_CHECKS 1")
+file(
+    STRINGS
+    "${LLVM_INCLUDE_DIR}/llvm/Config/abi-breaking.h"
+    _llvm_abi
+    REGEX "^#define LLVM_ENABLE_ABI_BREAKING_CHECKS 1"
+)
 if(NOT _llvm_abi)
-  message(FATAL_ERROR "${LLVM_INSTALL_DIR} needs LLVM_ENABLE_ABI_BREAKING_CHECKS=1 to match libtriton")
+    message(FATAL_ERROR "${LLVM_INSTALL_DIR} needs LLVM_ENABLE_ABI_BREAKING_CHECKS=1 to match libtriton")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${MLIR_CMAKE_DIR} ${LLVM_CMAKE_DIR})
@@ -88,22 +99,36 @@ add_library(TritonAtlasBackend SHARED plugin.cpp)
 add_dependencies(TritonAtlasBackend MLIRAtlas TritonToAtlasVirtualPassIncGen)
 set_target_properties(TritonAtlasBackend PROPERTIES OUTPUT_NAME triton_atlas_backend)
 add_subdirectory(lib)
-target_include_directories(TritonAtlasBackend SYSTEM PRIVATE
-  ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} "${TRITON_WHEEL_DIR}/include")
+target_include_directories(
+    TritonAtlasBackend
+    SYSTEM
+    PRIVATE ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} "${TRITON_WHEEL_DIR}/include"
+)
 # atlas-mlir sets its include paths per folder, not on MLIRAtlas, so name them here (headers + TableGen output).
-target_include_directories(TritonAtlasBackend PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${CMAKE_CURRENT_BINARY_DIR}/include
-  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/atlas-mlir/include
-  ${CMAKE_CURRENT_BINARY_DIR}/atlas-mlir/include)
-target_compile_options(TritonAtlasBackend PRIVATE
-  -fvisibility=hidden -fno-rtti -fno-exceptions -Wno-deprecated-declarations)
+target_include_directories(
+    TritonAtlasBackend
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_BINARY_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/atlas-mlir/include
+        ${CMAKE_CURRENT_BINARY_DIR}/atlas-mlir/include
+)
+target_compile_options(
+    TritonAtlasBackend
+    PRIVATE -fvisibility=hidden -fno-rtti -fno-exceptions -Wno-deprecated-declarations
+)
 # Name the two static libraries by file: linking the MLIRAtlas target would also pull in its static MLIR libraries.
 # --no-undefined proves at link time that libtriton has everything; --no-as-needed keeps it listed as a dependency.
-target_link_libraries(TritonAtlasBackend PRIVATE
-  $<TARGET_FILE:MLIRAtlas>
-  "${LLVM_LIBRARY_DIR}/libMLIRFuncInlinerExtension.a"
-  -Wl,--no-undefined -Wl,--gc-sections
-  -Wl,--no-as-needed "${TRITON_LIB}" -Wl,--as-needed)
+target_link_libraries(
+    TritonAtlasBackend
+    PRIVATE
+        $<TARGET_FILE:MLIRAtlas>
+        "${LLVM_LIBRARY_DIR}/libMLIRFuncInlinerExtension.a"
+        -Wl,--no-undefined
+        -Wl,--gc-sections
+        -Wl,--no-as-needed
+        "${TRITON_LIB}"
+        -Wl,--as-needed
+)
 
 install(TARGETS TritonAtlasBackend LIBRARY DESTINATION triton_atlas_backend COMPONENT plugin)
