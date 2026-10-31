@@ -2,7 +2,7 @@
 # Layout follows triton-lang/triton-ext@268252b backend/AppleGPU/pyproject.toml (MIT).
 [build-system]
 # triton is here because CMake reads its headers and libtriton from the wheel.
-requires = ["scikit-build-core>=0.11", "cmake>=3.20", "ninja", "triton==3.9.0"]
+requires = ["scikit-build-core>=0.11", "cmake>=3.22", "ninja", "triton==3.9.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -50,7 +50,7 @@ ignore = ["E501", "E701", "E731", "E741"]
 "__init__.py" = ["F401"]
 
 [tool.scikit-build]
-cmake.version = ">=3.20"
+cmake.version = ">=3.22"
 cmake.build-type = "Release"
 # The plugin has no Python extension code, so one wheel fits every Python version we support.
 wheel.py-api = "py3"
