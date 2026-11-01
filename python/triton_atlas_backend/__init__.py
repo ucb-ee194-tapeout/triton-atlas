@@ -11,7 +11,7 @@ PLUGIN_LIBRARY = next(
     (p for p in (PACKAGE_DIR / PLUGIN_NAME, Path(sysconfig.get_paths()["purelib"]) / PACKAGE_DIR.name / PLUGIN_NAME)
      if p.exists()), None)
 if PLUGIN_LIBRARY is None:
-    raise ImportError(f"{PLUGIN_NAME} not found; build it with scripts/build.sh")
+    raise ImportError(f"{PLUGIN_NAME} not found; build it with make build.plugin")
 
 # Importing Triton imports compiler.py through the entry point, and compiler.py reads the names above, so Triton has
 # to come after them.

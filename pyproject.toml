@@ -18,8 +18,8 @@ license-files = ["LICENSE", "THIRD_PARTY_LICENSES/*"]
 dependencies = ["triton==3.9.0"]
 
 [dependency-groups]
-# Build tools. scripts/build.sh installs these. The format and lint tools aren't here: pre-commit installs its own, at
-# the versions in .pre-commit-config.yaml.
+# Build tools, at the versions in uv.lock. The format and lint tools aren't here: pre-commit installs its own, at the
+# versions in .pre-commit-config.yaml.
 dev = [
     "cmake",
     "ninja",
@@ -49,7 +49,13 @@ ignore = ["E501", "E701", "E731", "E741"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 
+# uv builds the plugin in .venv and build/plugin, as make does, so the two share one build. This keeps the LLVM and
+# compiler that build/plugin's CMake cache recorded during make setup.
+[tool.uv]
+no-build-isolation-package = ["triton-atlas-backend"]
+
 [tool.scikit-build]
+build-dir = "build/plugin"
 cmake.version = ">=3.22"
 cmake.build-type = "Release"
 # The plugin has no Python extension code, so one wheel fits every Python version we support.

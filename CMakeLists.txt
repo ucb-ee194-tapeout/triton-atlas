@@ -3,7 +3,49 @@
 # compile against the wheel's headers and an LLVM install of the same commit, and link only against libtriton, which
 # exports MLIR and LLVM. A second copy of MLIR in our library would break MLIR's type registry.
 cmake_minimum_required(VERSION 3.22)
+
+# LLVM: headers, TableGen and CMake modules only. It must be the commit Triton was built with (checked below).
+# env.sh's value always wins. It's cached so a later `cmake --build` can reconfigure without env.sh.
+if(DEFINED ENV{LLVM_INSTALL_DIR})
+    set(LLVM_INSTALL_DIR "$ENV{LLVM_INSTALL_DIR}" CACHE PATH "LLVM install to build against" FORCE)
+endif()
+if(NOT EXISTS "${LLVM_INSTALL_DIR}/lib/cmake/mlir")
+    message(
+        FATAL_ERROR
+        "No MLIR in '${LLVM_INSTALL_DIR}'. Fix LLVM_INSTALL_DIR in env.sh or run make setup.llvm LLVM=<dir>."
+    )
+endif()
+
+# Compiler: the clang from that LLVM, as Triton uses, or the ones env.sh names. make and uv both get here, and uv skips
+# scripts/common.sh, so this is the place to stop a shell's settings, such as conda's, from reaching our build.
+foreach(
+    _var
+    CC
+    CXX
+    CFLAGS
+    CXXFLAGS
+    CPPFLAGS
+    LDFLAGS
+)
+    unset(ENV{${_var}})
+endforeach()
+set(_cc "$ENV{TRITON_ATLAS_CC}")
+set(_cxx "$ENV{TRITON_ATLAS_CXX}")
+if(NOT _cxx AND EXISTS "${LLVM_INSTALL_DIR}/bin/clang++")
+    set(_cc "${LLVM_INSTALL_DIR}/bin/clang")
+    set(_cxx "${LLVM_INSTALL_DIR}/bin/clang++")
+endif()
+if(NOT CMAKE_CXX_COMPILER AND _cxx)
+    set(CMAKE_C_COMPILER "${_cc}" CACHE FILEPATH "C compiler")
+    set(CMAKE_CXX_COMPILER "${_cxx}" CACHE FILEPATH "C++ compiler")
+endif()
+
 project(triton_atlas_backend LANGUAGES C CXX)
+
+# Link with that LLVM's lld, if it has one, when compiling with its clang.
+if(CMAKE_CXX_COMPILER STREQUAL "${LLVM_INSTALL_DIR}/bin/clang++" AND EXISTS "${LLVM_INSTALL_DIR}/bin/ld.lld")
+    add_link_options(-fuse-ld=lld)
+endif()
 
 set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ standard; must match Triton's")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -25,13 +67,6 @@ if(NOT _triton_found EQUAL 0 OR NOT EXISTS "${TRITON_WHEEL_DIR}/include/triton/T
     message(FATAL_ERROR "No Triton wheel with plugin headers found by ${Python_EXECUTABLE}")
 endif()
 
-# LLVM: headers, TableGen and CMake modules only. It must be the commit Triton was built with (checked below).
-if(NOT LLVM_INSTALL_DIR)
-    set(LLVM_INSTALL_DIR "$ENV{LLVM_INSTALL_DIR}")
-endif()
-if(NOT LLVM_INSTALL_DIR)
-    message(FATAL_ERROR "Set LLVM_INSTALL_DIR to an LLVM install; see scripts/build.sh")
-endif()
 # Forget a previous LLVM, so changing LLVM_INSTALL_DIR in an existing build folder takes effect.
 unset(MLIR_DIR CACHE)
 unset(LLVM_DIR CACHE)
@@ -49,7 +84,7 @@ if(NOT TRITON_LLVM_COMMIT OR NOT TRITON_LLVM_COMMIT STREQUAL HAVE_LLVM_COMMIT)
     message(
         FATAL_ERROR
         "${LLVM_INSTALL_DIR} is LLVM '${HAVE_LLVM_COMMIT}', but ${TRITON_LIB} was built with "
-        "'${TRITON_LLVM_COMMIT}'"
+        "'${TRITON_LLVM_COMMIT}'. Set LLVM_INSTALL_DIR in env.sh to an install of that commit, or to build/llvm and run make setup.llvm."
     )
 endif()
 
@@ -88,6 +123,13 @@ include(TableGen)
 include(AddLLVM)
 include(AddMLIR)
 include_directories(${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})
+
+# Headers name their own paths, in LLVM's asserts for example, so a wheel would carry this machine's folders.
+add_compile_options(
+    "-ffile-prefix-map=${LLVM_INSTALL_DIR}=llvm"
+    "-ffile-prefix-map=${TRITON_WHEEL_DIR}=triton"
+    "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+)
 
 # atlas-mlir (pinned submodule) builds with its own CMake; EXCLUDE_FROM_ALL builds only the library we link.
 add_subdirectory(third_party/atlas-mlir ${CMAKE_CURRENT_BINARY_DIR}/atlas-mlir EXCLUDE_FROM_ALL)

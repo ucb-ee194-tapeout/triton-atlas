@@ -7,6 +7,11 @@ project(triton_atlas_lsp LANGUAGES C CXX)
 find_package(MLIR REQUIRED CONFIG)
 
 get_filename_component(_repo "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+# Triton's setup.py normally passes this; the source names its own version.
+file(STRINGS "${_repo}/third_party/triton/python/triton/__init__.py" _triton_source REGEX "^__version__ = ")
+string(REGEX MATCH "'([^'+]+)" _ "${_triton_source}")
+set(TRITON_VERSION "${CMAKE_MATCH_1}" CACHE STRING "Triton version")
+
 add_subdirectory("${_repo}/third_party/triton" triton)
 get_property(_triton_libs GLOBAL PROPERTY TRITON_LIBS)
 add_subdirectory("${_repo}/third_party/atlas-mlir" atlas-mlir EXCLUDE_FROM_ALL)

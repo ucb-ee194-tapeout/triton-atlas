@@ -1,5 +1,5 @@
 # The tools .githooks/ runs. Hooks and versions follow triton v3.9.0 .pre-commit-config.yaml, so our style matches
-# Triton's. Run them by hand with: pre-commit run --all-files
+# Triton's. Run them by hand with make format.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

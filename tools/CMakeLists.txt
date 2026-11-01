@@ -1,5 +1,5 @@
-# The language server, linked to the wheel's libtriton. It isn't installed into the wheel. libtriton is a Python
-# extension, so a plain program must also load libpython.
+# The small language server, linked to the wheel's libtriton. make build.lsp.small builds it; it isn't in the wheel.
+# libtriton is a Python extension, so a plain program must also load libpython.
 # Ask for the file by name: conda's Python reports its static library even when the shared one is there.
 execute_process(
     COMMAND
@@ -9,11 +9,15 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 if(NOT EXISTS "${_python_lib}")
-    message(STATUS "No shared libpython at ${_python_lib}; skipping triton-atlas-lsp")
+    add_custom_target(
+        triton-atlas-lsp
+        COMMAND ${CMAKE_COMMAND} -E echo "No shared libpython at ${_python_lib}; try make build.lsp.full"
+        COMMAND ${CMAKE_COMMAND} -E false
+    )
     return()
 endif()
 
-add_executable(triton-atlas-lsp triton-atlas-lsp.cpp)
+add_executable(triton-atlas-lsp EXCLUDE_FROM_ALL triton-atlas-lsp.cpp)
 add_dependencies(triton-atlas-lsp MLIRAtlas)
 set_target_properties(
     triton-atlas-lsp
@@ -43,8 +47,3 @@ target_link_libraries(
         "${_python_lib}"
         -Wl,--allow-shlib-undefined
 )
-
-# Editors use this stable path. scripts/build-lsp-from-source.sh repoints it, so leave an existing link alone.
-if(NOT EXISTS "${CMAKE_BINARY_DIR}/../triton-atlas-lsp")
-    file(CREATE_LINK "${CMAKE_BINARY_DIR}/bin/triton-atlas-lsp" "${CMAKE_BINARY_DIR}/../triton-atlas-lsp" SYMBOLIC)
-endif()
