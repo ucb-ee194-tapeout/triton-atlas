@@ -55,13 +55,15 @@ lsp_tblgen() {
     ln -sf "$PWD/build/tblgen-lsp/bin/triton-atlas-tblgen-lsp" build/tblgen-lsp-server
 }
 
-# Keep the full atlas-mlir build current, and link every tool that exists into build/bin, which env.sh puts on PATH.
+# Build triton-atlas-opt, keep the full atlas-mlir build current, and link every tool that exists into build/bin, which
+# env.sh puts on PATH.
 tools() {
     [ ! -f build/atlas/build.ninja ] || cmake --build build/atlas
+    cmake --build build/plugin --target triton-atlas-opt
     rm -rf build/bin
     mkdir -p build/bin
     local tool
-    for tool in build/atlas/bin/* build/triton/triton/bin/*; do
+    for tool in build/plugin/bin/triton-atlas-opt build/atlas/bin/* build/triton/triton/bin/*; do
         case "$tool" in *-test) continue ;; esac
         if [ -f "$tool" ] && [ -x "$tool" ]; then ln -sf "$PWD/$tool" build/bin/; fi
     done

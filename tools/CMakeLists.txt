@@ -1,4 +1,5 @@
-# The small language server, linked to the wheel's libtriton. make build.lsp.small builds it; it isn't in the wheel.
+# Two programs linked to the wheel's libtriton, which aren't in the wheel: the small language server (make
+# build.lsp.small) and triton-atlas-opt (make build.tools).
 # libtriton is a Python extension, so a plain program must also load libpython.
 # Ask for the file by name: conda's Python reports its static library even when the shared one is there.
 execute_process(
@@ -14,14 +15,20 @@ if(NOT EXISTS "${_python_lib}")
         COMMAND ${CMAKE_COMMAND} -E echo "No shared libpython at ${_python_lib}; try make build.lsp.full"
         COMMAND ${CMAKE_COMMAND} -E false
     )
+    add_custom_target(
+        triton-atlas-opt
+        COMMAND ${CMAKE_COMMAND} -E echo "No shared libpython at ${_python_lib}"
+        COMMAND ${CMAKE_COMMAND} -E false
+    )
     return()
 endif()
 
-# It registers every upstream MLIR dialect. libtriton comes first on the link line, so whatever it exports comes from
+# Both register every upstream MLIR dialect. libtriton comes first on the link line, so whatever it exports comes from
 # it; MLIR's static libraries then fill in only what it lacks. A second copy of what libtriton exports would break
 # MLIR's type registry (see the top CMakeLists.txt).
 file(GLOB _mlir_archives "${LLVM_LIBRARY_DIR}/libMLIR*.a" "${LLVM_LIBRARY_DIR}/libLLVM*.a")
 
+# The language server.
 add_executable(triton-atlas-lsp EXCLUDE_FROM_ALL triton-atlas-lsp.cpp)
 add_dependencies(triton-atlas-lsp MLIRAtlas)
 set_target_properties(
@@ -45,6 +52,36 @@ target_link_libraries(
         $<TARGET_FILE:MLIRAtlas>
         "${LLVM_LIBRARY_DIR}/libMLIRLspServerLib.a"
         "${LLVM_LIBRARY_DIR}/libMLIRRegisterAllDialects.a"
+        -Wl,--start-group
+        ${_mlir_archives}
+        -Wl,--end-group
+        "${_python_lib}"
+        -Wl,--allow-shlib-undefined
+)
+
+# triton-atlas-opt: also every upstream MLIR pass and MLIR's opt driver. It loads our plugin at runtime, so it needs
+# the plugin built, and TRITON_ATLAS_PLUGIN tells it where.
+add_executable(triton-atlas-opt EXCLUDE_FROM_ALL triton-atlas-opt.cpp)
+add_dependencies(triton-atlas-opt TritonAtlasBackend)
+target_compile_definitions(triton-atlas-opt PRIVATE TRITON_ATLAS_PLUGIN="$<TARGET_FILE:TritonAtlasBackend>")
+set_target_properties(
+    triton-atlas-opt
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin" BUILD_RPATH "${TRITON_WHEEL_DIR}/_C"
+)
+target_include_directories(
+    triton-atlas-opt
+    SYSTEM
+    PRIVATE ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} "${TRITON_WHEEL_DIR}/include"
+)
+target_compile_options(triton-atlas-opt PRIVATE -fvisibility=hidden -fno-rtti -fno-exceptions)
+target_link_libraries(
+    triton-atlas-opt
+    PRIVATE
+        "${TRITON_LIB}"
+        "${LLVM_LIBRARY_DIR}/libMLIROptLib.a"
+        "${LLVM_LIBRARY_DIR}/libMLIRRegisterAllDialects.a"
+        "${LLVM_LIBRARY_DIR}/libMLIRRegisterAllPasses.a"
+        "${LLVM_LIBRARY_DIR}/libMLIRRegisterAllExtensions.a"
         -Wl,--start-group
         ${_mlir_archives}
         -Wl,--end-group

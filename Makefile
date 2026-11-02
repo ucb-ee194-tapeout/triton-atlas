@@ -125,7 +125,7 @@ build.lsp.tblgen: ## the server for .td files
 	+scripts/build.sh lsp_tblgen
 
 .PHONY: build.tools
-build.tools: build.plugin ## keep atlas-mlir current if built, and link every tool in build/bin
+build.tools: build.plugin ## build triton-atlas-opt, keep atlas-mlir current if built, and link every tool in build/bin
 	+scripts/build.sh tools
 
 .PHONY: build.wheel

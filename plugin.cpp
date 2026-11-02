@@ -4,6 +4,7 @@
 // triton-lang/triton-ext@268252b backend/AppleGPU/ExportAppleGPU.cpp does
 // (MIT).
 #include "Atlas/AtlasDialect.h"
+#include "Atlas/AtlasVirtualVerification.h"
 #include "TritonToAtlasVirtual/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
@@ -29,6 +30,14 @@ static void registerAtlasDialects(mlir::DialectRegistry *registry) {
   mlir::func::registerInlinerExtension(*registry);
 }
 
+// Our passes, plus atlas-mlir's check that its virtual IR is well formed, so
+// tests and triton-atlas-opt can run --verify-atlas-virtual-stream on our
+// output.
+static void registerAtlasPasses() {
+  registerTritonToAtlasVirtualPasses();
+  mlir::atlas::registerVerifyAtlasVirtualStreamPass();
+}
+
 // Python sees this as passes.plugin.add_atlas_virtual_pipeline(pm). The
 // callback gets the whole PassManager, so one call adds our full pipeline.
 static void addAtlasVirtualPipeline(mlir::PassManager *pm,
@@ -39,7 +48,7 @@ static void addAtlasVirtualPipeline(mlir::PassManager *pm,
 TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
   static plugin::PassInfo passes[] = {
       {"atlas_virtual_pipeline", "0.1.0", addAtlasVirtualPipeline,
-       registerTritonToAtlasVirtualPasses},
+       registerAtlasPasses},
   };
 
   static plugin::DialectInfo dialects[] = {
