@@ -133,6 +133,15 @@ build.wheel: build/plugin/build.ninja ## build the wheel to hand out, in build/d
 	+scripts/build.sh wheel
 
 # ----------------------------------------------------------------------------------------------------------------------
+# Test
+# ----------------------------------------------------------------------------------------------------------------------
+
+# T picks the tests: a file or a folder under test/ (make test T=test/plugin). lit's own LIT_FILTER=<regex> also works.
+.PHONY: test
+test: build.tools ## run the lit tests in test/; T=<file or folder> runs some
+	+scripts/build.sh tests $(T)
+
+# ----------------------------------------------------------------------------------------------------------------------
 # Format
 # ----------------------------------------------------------------------------------------------------------------------
 

@@ -69,6 +69,11 @@ tools() {
     done
 }
 
+# The lit tests: all of test/, or the files and folders given. Named tests because test is a shell builtin.
+tests() {
+    lit -sv "${@:-test}"
+}
+
 # Build the server in folder $1 and link it where editors look.
 link_lsp() {
     cmake --build "$1" --target triton-atlas-lsp

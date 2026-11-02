@@ -22,6 +22,7 @@ dependencies = ["triton==3.9.0"]
 # versions in .pre-commit-config.yaml.
 dev = [
     "cmake",
+    "lit",
     "ninja",
     "pre-commit",
     "scikit-build-core>=0.11",
