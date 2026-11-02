@@ -113,11 +113,11 @@ build.lsp: build.plugin ## the language server: full if Triton is built, otherwi
 	+scripts/build.sh lsp
 
 .PHONY: build.lsp.small
-build.lsp.small: build.plugin ## the server with the dialects this repo uses
+build.lsp.small: build.plugin ## the server linked to the wheel
 	+scripts/build.sh lsp_small
 
 .PHONY: build.lsp.full
-build.lsp.full: setup.triton ## the server with every MLIR dialect
+build.lsp.full: setup.triton ## the server built from Triton's source
 	+scripts/build.sh lsp_full
 
 .PHONY: build.lsp.tblgen

@@ -1,4 +1,4 @@
-# The language server built from the Triton submodule, which adds every upstream MLIR dialect. A wrapper project, so
+# The language server built from the Triton submodule, with no wheel or libpython involved. A wrapper project, so
 # Triton stays unpatched: it builds Triton and atlas-mlir side by side, then links the server to both.
 cmake_minimum_required(VERSION 3.22)
 project(triton_atlas_lsp LANGUAGES C CXX)
@@ -18,7 +18,7 @@ add_subdirectory("${_repo}/third_party/atlas-mlir" atlas-mlir EXCLUDE_FROM_ALL)
 
 add_executable(triton-atlas-lsp EXCLUDE_FROM_ALL "${_repo}/tools/triton-atlas-lsp.cpp")
 set_target_properties(triton-atlas-lsp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-target_compile_definitions(triton-atlas-lsp PRIVATE TRITON_ATLAS_LSP_ALL_DIALECTS)
+target_compile_definitions(triton-atlas-lsp PRIVATE TRITON_ATLAS_LSP_FROM_SOURCE)
 target_compile_options(triton-atlas-lsp PRIVATE -fno-rtti -fno-exceptions)
 target_include_directories(
     triton-atlas-lsp

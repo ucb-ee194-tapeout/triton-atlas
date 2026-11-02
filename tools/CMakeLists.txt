@@ -17,6 +17,11 @@ if(NOT EXISTS "${_python_lib}")
     return()
 endif()
 
+# It registers every upstream MLIR dialect. libtriton comes first on the link line, so whatever it exports comes from
+# it; MLIR's static libraries then fill in only what it lacks. A second copy of what libtriton exports would break
+# MLIR's type registry (see the top CMakeLists.txt).
+file(GLOB _mlir_archives "${LLVM_LIBRARY_DIR}/libMLIR*.a" "${LLVM_LIBRARY_DIR}/libLLVM*.a")
+
 add_executable(triton-atlas-lsp EXCLUDE_FROM_ALL triton-atlas-lsp.cpp)
 add_dependencies(triton-atlas-lsp MLIRAtlas)
 set_target_properties(
@@ -33,17 +38,16 @@ target_include_directories(
     PRIVATE ${PROJECT_SOURCE_DIR}/third_party/atlas-mlir/include ${PROJECT_BINARY_DIR}/atlas-mlir/include
 )
 target_compile_options(triton-atlas-lsp PRIVATE -fvisibility=hidden -fno-rtti -fno-exceptions)
-# As with the plugin, MLIR and LLVM come from libtriton; these static libraries hold only what it doesn't export.
 target_link_libraries(
     triton-atlas-lsp
     PRIVATE
+        "${TRITON_LIB}"
         $<TARGET_FILE:MLIRAtlas>
         "${LLVM_LIBRARY_DIR}/libMLIRLspServerLib.a"
-        "${LLVM_LIBRARY_DIR}/libMLIRLspServerSupportLib.a"
-        "${LLVM_LIBRARY_DIR}/libLLVMSupportLSP.a"
-        "${LLVM_LIBRARY_DIR}/libMLIRBytecodeWriter.a"
-        "${LLVM_LIBRARY_DIR}/libMLIRBytecodeOpInterface.a"
-        "${TRITON_LIB}"
+        "${LLVM_LIBRARY_DIR}/libMLIRRegisterAllDialects.a"
+        -Wl,--start-group
+        ${_mlir_archives}
+        -Wl,--end-group
         "${_python_lib}"
         -Wl,--allow-shlib-undefined
 )
