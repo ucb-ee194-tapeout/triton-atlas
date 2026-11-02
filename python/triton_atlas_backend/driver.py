@@ -7,6 +7,7 @@
 #   npu      run on npu_model (phase 2 of the plan; not implemented yet)
 # The hooks are DriverBase's (triton v3.9.0 python/triton/backends/driver.py:114-157).
 import os
+import warnings
 
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
@@ -41,7 +42,15 @@ class AtlasDriver(DriverBase):
 
     @staticmethod
     def is_active():
-        return bool(_target())
+        if _target():
+            return True
+        # Triton's error for no active driver doesn't name us, so say here what turns this one on. It imports us while
+        # it fills `backends`, so that import has to wait until now.
+        from triton.backends import backends
+        if not any(backend.driver.is_active() for name, backend in backends.items() if name != "atlas"):
+            warnings.warn(f"no Triton backend is active; to use Atlas, set TRITON_ATLAS_TARGET to one of {TARGETS}",
+                          stacklevel=2)
+        return False
 
     def map_python_to_cpp_type(self, ty: str) -> str:
         raise NotImplementedError("the Atlas backend has no C launcher")
