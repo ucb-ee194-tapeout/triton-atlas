@@ -85,7 +85,7 @@ triton-atlas/
 | Rebuild only the plugin | `make build.plugin` |
 | Run the tests | `make test` |
 | Run some tests | `make test T=<file or folder>`; `LIT_FILTER=<regex>` picks by name |
-| Run passes on one file | `triton-atlas-opt kernel.ttir --convert-triton-to-atlas-virtual --verify-atlas-virtual-stream` |
+| Run passes on one file | `triton-atlas-opt kernel.ttir --ttatlas-pipeline` (all of them) or `--<pass-name>` (one) |
 | Compile a kernel | `uv run python my_kernel.py` |
 | Format and lint | `make format` (the git hooks run it on commit) |
 | Build the wheel | `make build.wheel` |

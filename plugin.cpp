@@ -12,6 +12,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassRegistry.h"
 #include "triton/Tools/PluginUtils.h"
 #include "triton/Version.h"
 
@@ -38,6 +39,12 @@ static void registerAtlasDialects(mlir::DialectRegistry *registry) {
 static void registerAtlasPasses() {
   registerTritonToAtlasVirtualPasses();
   mlir::atlas::registerVerifyAtlasVirtualStreamPass();
+  // The whole pipeline under one name, so tests (triton-atlas-opt
+  // --ttatlas-pipeline) run exactly what Pipeline.cpp builds instead of a
+  // copied pass list.
+  static mlir::PassPipelineRegistration<> pipeline(
+      "ttatlas-pipeline", "Run the TTIR -> Atlas virtual passes in order",
+      [](mlir::OpPassManager &pm) { buildTritonToAtlasVirtualPipeline(pm); });
 }
 
 // Python sees this as passes.plugin.add_atlas_virtual_pipeline(pm). The
