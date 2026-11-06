@@ -2,6 +2,7 @@
 // Boundary conversion owns the function ABI and the linear I/O state chain.
 // Compute operations are cloned unchanged for the other registered patterns.
 #include "Patterns.h"
+#include "TritonToAtlasVirtual/BoundaryTiles.h"
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "Atlas/AtlasOps.h"
@@ -46,31 +47,59 @@ struct ConvertBoundary : OpConversionPattern<FuncOp> {
 
     std::map<int32_t, std::pair<ttatlas::SlotAttr, Type>> inputs;
     SmallVector<int32_t> outputs;
+    llvm::SmallPtrSet<Operation *, 32> inputTags;
+    SmallVector<BoundaryTile> tiles;
+    llvm::SmallPtrSet<Operation *, 32> scaffolding;
+    if (failed(collectBoundaryTiles(source, tiles, scaffolding)))
+      return failure();
+    bool nestedMemory = false;
+    source.walk([&](Operation *op) {
+      if (isa<LoadOp, StoreOp>(op) && op->getBlock() != &body)
+        nestedMemory = true;
+    });
+    if (nestedMemory)
+      return reject("nested boundary memory requires control-flow support");
     bool sawStore = false;
     for (Operation &op : body) {
-      if (op.getNumRegions())
+      // Linalg compute regions belong to the compute patterns. Nested memory
+      // and control flow still require an ABI beyond M1.
+      if (op.getNumRegions() && op.getName().getDialectNamespace() != "linalg")
         return reject(
             "nested regions require the future control-flow boundary ABI");
-      if (!isa<LoadOp, StoreOp>(op))
-        continue;
-      auto slot = op.getAttrOfType<ttatlas::SlotAttr>(ttatlas::kSlot);
-      if (!slot)
-        return reject("tt.load/tt.store is missing #ttatlas.slot from Pass 5");
-      if (slot.getArg() >= source.getNumArguments() ||
-          !isa<PointerType>(source.getArgument(slot.getArg()).getType()) ||
-          slot.getLogicalShape() != ArrayRef<int64_t>{32, 32})
-        return reject("slot argument or logical shape is incompatible with the "
-                      "M1 boundary ABI");
       if (auto load = dyn_cast<LoadOp>(op)) {
         if (sawStore || load.getMask() || load.getIsVolatile())
           return reject("boundary inputs must be unmasked, nonvolatile loads "
                         "before all stores");
-        auto tensor = dyn_cast<RankedTensorType>(load.getType());
-        if (!tensor || tensor.getShape() != ArrayRef<int64_t>{32, 32} ||
+      }
+      if (auto store = dyn_cast<StoreOp>(op)) {
+        if (store.getMask())
+          return reject("outputs require unmasked BF16 tiles with unique "
+                        "output_bf16 slots");
+        sawStore = true;
+      }
+    }
+    for (const BoundaryTile &tile : tiles) {
+      auto slot = tile.tag->getAttrOfType<ttatlas::SlotAttr>(ttatlas::kSlot);
+      if (!slot)
+        return reject("boundary tile is missing #ttatlas.slot from Pass 6");
+      if (slot.getArg() < 0 || slot.getArg() >= source.getNumArguments() ||
+          !isa<PointerType>(source.getArgument(slot.getArg()).getType()) ||
+          slot.getLogicalShape() != ArrayRef<int64_t>{32, 32})
+        return reject("slot argument or logical shape is incompatible with the "
+                      "M1 boundary ABI");
+      auto tensor = dyn_cast<RankedTensorType>(tile.value.getType());
+      if (isa<LoadOp>(tile.memory)) {
+        inputTags.insert(tile.tag);
+        if (!tensor || !isBoundaryTile(tensor) ||
             (!tensor.getElementType().isBF16() &&
              !isa<Float8E4M3FNType>(tensor.getElementType())) ||
             slot.getRole() == ttatlas::SlotRole::output_bf16)
           return reject("unsupported input tile type or slot role");
+        bool fp8Role = slot.getRole() == ttatlas::SlotRole::activation_fp8 ||
+                       slot.getRole() == ttatlas::SlotRole::weight_fp8_kn ||
+                       slot.getRole() == ttatlas::SlotRole::weight_fp8_nk;
+        if (fp8Role == tensor.getElementType().isBF16())
+          return reject("input role disagrees with tile representation");
         auto [it, inserted] = inputs.emplace(
             slot.getIndex(), std::make_pair(slot, tensor.getElementType()));
         if (!inserted && (it->second.first != slot ||
@@ -78,18 +107,19 @@ struct ConvertBoundary : OpConversionPattern<FuncOp> {
           return reject(
               "one input index names inconsistent slots or tile types");
       } else {
-        auto store = cast<StoreOp>(op);
-        auto tensor = dyn_cast<RankedTensorType>(store.getValue().getType());
-        if (store.getMask() || !tensor ||
-            tensor.getShape() != ArrayRef<int64_t>{32, 32} ||
+        if (!tensor || !isBoundaryTile(tensor) ||
             !tensor.getElementType().isBF16() ||
             slot.getRole() != ttatlas::SlotRole::output_bf16 ||
             llvm::is_contained(outputs, slot.getIndex()))
           return reject("outputs require unmasked BF16 tiles with unique "
                         "output_bf16 slots");
-        sawStore = true;
         outputs.push_back(slot.getIndex());
       }
+    }
+    for (Operation &op : body) {
+      if ((isa<tensor::ExtractSliceOp>(op) && !inputTags.contains(&op)) ||
+          (isa<tensor::InsertSliceOp>(op) && !scaffolding.contains(&op)))
+        return reject("slice is not a supported slotted boundary tile");
     }
     if (outputs.empty())
       return reject("an Atlas kernel requires at least one output boundary");
@@ -188,25 +218,30 @@ struct ConvertBoundary : OpConversionPattern<FuncOp> {
     }
     IRMapping mapping;
     for (Operation &op : body) {
-      if (auto load = dyn_cast<LoadOp>(op)) {
+      if (inputTags.contains(&op)) {
         auto slot = op.getAttrOfType<ttatlas::SlotAttr>(ttatlas::kSlot);
-        mapping.map(load.getResult(), inputValues.at(slot.getIndex()));
+        mapping.map(op.getResult(0), inputValues.at(slot.getIndex()));
       } else if (auto store = dyn_cast<StoreOp>(op)) {
-        Value value = mapping.lookupOrDefault(store.getValue());
-        // A compute pattern will convert this SSA result after the function
-        // pattern. A tensor value is intentionally retained until that rewrite.
-        auto slot = op.getAttrOfType<ttatlas::SlotAttr>(ttatlas::kSlot);
-        OperationState output(op.getLoc(),
-                              atlas::VirtualOutputBF16Op::getOperationName());
-        output.addOperands({state, value});
-        output.addTypes(stateType);
-        output.addAttribute("index",
-                            rewriter.getI32IntegerAttr(slot.getIndex()));
-        output.addAttribute(ttatlas::kSlot, slot);
-        state = rewriter.create(output)->getResult(0);
+        // Emit at the original store, after all tile computations. Insert-slice
+        // assemblies only describe host placement; they have no virtual value.
+        for (const BoundaryTile &tile : tiles) {
+          if (tile.memory != &op)
+            continue;
+          auto slot =
+              tile.tag->getAttrOfType<ttatlas::SlotAttr>(ttatlas::kSlot);
+          Value value = mapping.lookupOrDefault(tile.value);
+          OperationState output(op.getLoc(),
+                                atlas::VirtualOutputBF16Op::getOperationName());
+          output.addOperands({state, value});
+          output.addTypes(stateType);
+          output.addAttribute("index",
+                              rewriter.getI32IntegerAttr(slot.getIndex()));
+          output.addAttribute(ttatlas::kSlot, slot);
+          state = rewriter.create(output)->getResult(0);
+        }
       } else if (isa<ReturnOp>(op)) {
         rewriter.create<func::ReturnOp>(op.getLoc(), state);
-      } else if (!addressOps.contains(&op)) {
+      } else if (!addressOps.contains(&op) && !scaffolding.contains(&op)) {
         rewriter.clone(op, mapping);
       }
     }

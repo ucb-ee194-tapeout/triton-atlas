@@ -1,4 +1,4 @@
-// RUN: triton-atlas-opt %s --ttatlas-assign-slots --ttatlas-verify-contract=stage=5 | FileCheck %s
+// RUN: triton-atlas-opt %s --ttatlas-assign-slots --ttatlas-verify-contract=stage=6 | FileCheck %s
 // CHECK: index = 1, arg = 1, role = weight_fp8_nk
 module {
   tt.func public @matmul_relu_kernel(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<bf16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {

@@ -1,140 +1,137 @@
 # Boundaries + Stream lane (M1)
 
-The lane now uses the existing pipeline's Pass 5, `ttatlas-assign-slots`, and
-its frozen `#ttatlas.slot` attribute. The standalone `atlas-analyze-boundaries`
-pass, dictionary attribute, registration, and tests have been retired after
-migrating the pointer proof and its tests. No TableGen encoding or pipeline
-order changed. The old dictionary schema tests are superseded by the existing
-frozen-attribute verifier tests. Physical placement belongs to the documented
-Pass 6 ABI, not pointer analysis.
+## Pass 6: logical tile slots
 
-## Pass 5
+The native C++ pointer evaluator from `b47dca6` remains the proof engine:
+function pointer arguments, splat/expand_dims/broadcast, chained addptr,
+make_range, scalar/dense integer constants, and add/subtract/multiply.
+APInt preserves integer wrapping and rejects poison-producing nsw/nuw overflow.
+Hints never substitute for an address proof.
 
-The native C++ analysis evaluates every pointer lane of the fixed 32x32 tile.
-It handles function pointer arguments, splat, expand_dims, broadcast, chained
-addptr, integer scalar/dense constants, make_range, and addi/subi/muli.
-APInt preserves wrapping; poison-producing nsw/nuw overflow is rejected.
-Every lane must equal `argument + offset + row*32 + column`. Hints such as
-`tt.divisibility` are not accepted as proof. Offsets must be nonnegative,
-row-aligned, and fit signed i64; tile_origin is the six-symbol affine map with
-constant results `(offset / 32, 0)`. Other row strides/layouts need a richer
-host-view contract and are rejected, even if each row separately is contiguous.
+The approved slice contract keeps the frozen SlotAttr fields unchanged:
 
-Pass 1's `ttatlas.host_dtype` is required and copied verbatim into SlotAttr.
-Thus a legalized BF16 output can retain host dtype f32. The operation's current
-pointer/value dtype selects virtual input/output types, not the host dtype.
-SlotAttr's actual generated fields are ArrayRef<int64_t> and Type, rather than
-a separately invented DenseI64Array/TypeAttr encoding.
+- A direct 32x32 load/store carries its own `#ttatlas.slot`.
+- A larger load is used only by constant 32x32, unit-stride
+  `tensor.extract_slice` operations. Each slice carries its slot.
+- A larger store consumes a disjoint, complete chain of constant, tile-aligned
+  32x32 `tensor.insert_slice` operations into a fresh `tensor.empty`. Each
+  insert carries its output slot. Shared or overlapping assemblies fail.
 
-Input indices are dense from zero in first-access order, with a separate dense
-output space. Repeated inputs reuse an index only when argument, origin, role,
-logical shape, and host dtype all match. The current dtype is fixed by the
-source pointer argument; no pointer casts are accepted. Stores remain distinct
-ordered output events. Loads after any store are rejected conservatively.
-All attributes are published only after the complete module succeeds.
+`BoundaryTiles.h` shares structural interpretation between assignment, boundary
+lowering and the Stage 6 contract verifier. It does not number slots or prove
+pointers. Jonathan's verifier and attribute comments were updated only for this
+approved contract; no attribute fields or enum values changed.
 
-Role inference follows def-use paths through float casts and 2-D transposes:
+Each slice is evaluated at its parent coordinates. Every lane must prove
+`argument + first_offset + row * parent_width + column`; tile_origin is
+`(first_offset / parent_width, first_offset % parent_width)`. Thus parent pointer
+and slice offsets both contribute. A pointer argument must use a consistent
+host row width throughout the kernel, preventing accidental reuse across
+incompatible views. Other strides, dynamic accesses, masked memory, volatile
+loads, nested memory/control flow, pointer casts and FP8 stores fail explicitly.
 
-- Dot operand A without transpose: activation_fp8.
-- Dot operand B directly: weight_fp8_kn. With an odd number of [1,0]
-  transposes: weight_fp8_nk.
-- A BF16 input used by addf: bias_bf16; other BF16 inputs: constant_bf16.
-- A BF16 load with a neg_inf pad tag: mask_bf16.
-- Stores: output_bf16.
+Inputs use deterministic memory/slice source order, independent of SSA use-list
+order. Identical logical tiles reuse a slot only with matching role, original
+host dtype and logical shape. Conflicting representations and repeated output
+writes are rejected. Output indices form a separate dense space. No loads may
+follow stores. Attributes are published only after successful module analysis.
 
-Ambiguous activation/weight use, unsupported activation orientation, and FP8
-inputs with no provable dot role fail. This does not provide general softmax
-mask inference. Explicit memory masks, volatile loads, nested control flow,
-block pointers, dynamic offsets/strides, noncontiguous tiles, and FP8 stores
-fail with the shared emitUnsupported diagnostic. Pad tags on loads/stores or
-store producers are consumed; partial logical shapes fail pending Stage B
-packing semantics. A 1-D bias is also explicitly deferred: a logical_shape
-alone does not define the driver's broadcast/packing behavior.
+Role inference follows TTIR dot and upstream `linalg.matmul` operands, float
+casts, tensor casts, TTIR transposes and `linalg.transpose`. A direct B operand
+is KN; a transposed B source is NK. Transposed activations and ambiguous roles
+fail. BF16 addition/generic-add inputs are biases; other BF16 inputs are
+constants, or masks when tagged with neg_inf padding.
 
-## Pass 6 boundary conversion
+The original host dtype is copied verbatim from the parent memory operation.
+Full tiles inside a parent's unpadded logical extent retain shape [32,32].
+Partial padded tiles and 1-D bias packing remain outside M1.
 
-`populateBoundaryPatterns` registers a tt.func conversion through the existing
-Patterns.h hook. The pattern validates hand-tagged loads/stores, builds an
-argument-free func.func returning !atlas.virtual_state, and emits one input per
-unique slot in ascending input-index order. Repeated input indices must carry
-identical slot attributes and element types. Outputs preserve source order and
-must have unique, dense indices. A virtual_start/inputs/outputs/return chain
-threads state linearly. The original typed SlotAttr is retained on virtual I/O
-for KernelMetadata.cpp; no new attribute is introduced.
+## Pass 7: boundary conversion
 
-The pattern clones compute operations for the existing compute patterns to
-convert. It does not implement their type conversions or mappings. Pointer
-arguments may feed only the supported address grammar, which is removed
-instead of being copied. Address values escaping into compute are rejected.
-The shared conversion driver marks tt.func, tt.load, and tt.store illegal
-(the boundary legality change was approved). Other TTIR remains subject to the
-existing compute conversion and stage-6 contract checker.
+The existing boundary hook creates an argument-free func.func returning
+`!atlas.virtual_state`. Inputs are emitted by slot index; slices of a reused
+input map to the same virtual value. Outputs are emitted in original store and
+assembly order, threading the state token linearly. The original SlotAttr stays
+on virtual I/O for metadata generation.
 
-## Metadata: implemented and gated
+Whole-tensor loads/stores, boundary slices, output assembly empties and proven
+address scaffolding are removed. Escaping pointer/address values, unrelated
+slices and nested boundary memory fail before rewriting. Linalg compute regions
+are cloned for Devansh's patterns. The shared conversion driver and compute
+patterns were not changed in this integration. The driver still uses partial
+conversion while compute implementations are pending; Stage 7 and the stream
+verifier must be run to check completed output.
 
-Jonathan's design agenda v15 (November 5) defines the v1 field set:
-`version`, `name`, `dram_base: {input, output}`, `inputs`, `outputs`, `grid`,
-and `legalized`. Each slot table entry contains `index`, `arg`, `role`,
-`tile_origin`, `logical_shape`, `host_dtype`, and `layout`.
+## Kernel metadata v1
 
-Implemented unambiguous ABI work:
+The schema is packaged at
+`python/triton_atlas_backend/schemas/ttatlas.kernel.v1.schema.json`; the Stage A
+golden example is `docs/examples/ttatlas.kernel.v1.json`.
 
-- Input base from module ttatlas.dram_base, default 0x90000000.
-- Output base = input base + number of input slots * 2048.
-- Matching i64 atlas.input_dram_base / atlas.output_dram_base on func.func.
-- Existing base attributes must agree. AtlasBoundaryABI checks alignment,
-  selected DRAM, disjoint spans, and 32-bit address limits.
-- Preserved SlotAttrs must agree with virtual I/O indices. Slot indices are
-  dense and consistent. A supplied manifest's version, name, bases, slot
-  counts/index/argument/role, and fixed [1,1,1] grid are checked.
+Fields are version, name, dram_base {input,output}, inputs, outputs, grid and
+legalized. Slot entries include index, arg, role, tile_origin, logical_shape,
+host_dtype and layout. Decisions for v1/M1:
 
-Automatic manifest generation is deliberately gated: **without a supplied
-manifest the conversion does not attach ttatlas.kernel**, and the stage-6
-contract checker reports the missing manifest. No partial JSON is published.
-Full slot-table serialization, layout serialization/defaulting, and copying
-legalization records into a newly generated manifest await the confirmed schema.
-Zero-input kernels also need a decision: Atlas's current ABI reserves at least
-one input slot, whereas the documented placement formula counts actual inputs.
-M1 currently requires nonempty input/output tables rather than inventing a
-reservation rule.
+- Origins use canonical MLIR affine-map strings with six symbols and constant,
+  nonnegative results. Host dtypes use their original MLIR scalar spelling.
+- Layout uses the frozen enum spelling; the default is row_major.
+- Input/output tables are sorted by dense index. JSON key order is fixed by
+  the producer. JSON integer addresses use 2048-byte slots; default input base
+  is 0x90000000, output base immediately follows allocated input slots.
+- Grid is [1,1,1]. Legalization records preserve {pass,what,loc} and source order;
+  absent history becomes []. Existing manifests must match every generated
+  field, including original dtypes, origins, layout and history.
+- Empty input/output tables are rejected: atlas-mlir reserves at least one
+  slot per window, so zero-input placement needs a separate ABI decision.
 
-The Python compiler uses native module.walk/get_str_attr to read the converted
-func.func's manifest, checks version/name, and copies its exact JSON string
-into cached metadata under `ttatlas_kernel`. Dotted metadata keys cannot be
-used because Triton turns metadata into a Python namedtuple. The exporter
-preserves Triton fields, sets the function name and shared=0, and fails clearly
-if no finalized manifest exists. The driver is unchanged.
+AtlasBoundaryABI validates aligned, disjoint selected-DRAM windows and 32-bit
+address bounds. The Python exporter validates the packaged JSON Schema plus
+index/address relationships before copying the exact JSON string into Triton's
+cached metadata. The cache field is `ttatlas_kernel`, because Triton constructs
+a namedtuple and cannot accept dotted metadata keys. MLIR retains `ttatlas.kernel`.
+Existing name/shared and unrelated cache fields are preserved appropriately.
 
-### Decisions for Jonathan's schema file and golden example
+AtlasOptions includes precision_policy, layout and dram_base, all covered by
+its cache hash. Since Triton's Python bindings expose no i64/custom-enum
+attribute builder, placement is handed to our producer as the private string
+attribute `atlas_backend.options`, then normalized to the frozen typed module
+attributes. Explicit module settings must agree. The precision policy uses the
+existing shared string tag. The backend hash also includes schema contents.
 
-Smallest proposed choices, **not implemented/frozen by this lane**:
+## Upstream integration limits
 
-1. Serialize tile_origin as canonical MLIR affine-map assembly in a JSON
-   string, including all six symbols. This preserves future symbolic origins
-   without inventing a JSON expression language. Alternative: M1-only [row,col]
-   constants, but that requires a later schema decision for symbolic maps.
-2. Serialize host_dtype as its MLIR scalar type spelling (`bf16`, `f32`,
-   `f8E4M3FN`), and layout as the existing enum spelling (`row_major` or
-   `tile_major`). Confirm whether Triton dtype spellings are preferred instead.
-3. Require an explicit module layout until the backend's default is agreed.
-4. Sort input/output table entries by index; preserve the existing
-   legalization record objects `{pass, what, loc}` unchanged, default [] only
-   when ttatlas.legalized is absent. Use JSON integer addresses and grid values.
-5. Confirm `ttatlas_kernel` as the driver-facing cached metadata key, containing
-   the original JSON string, and the zero-input window rule above.
+The feature branch contains latest fetched main `5ecf687`, plus preserved
+history from the interrupted merge of `e909d2b`. Passes 1-5 and compute/type
+conversion still contain upstream placeholders. The real Stage A TTIR fixture
+first fails because Pass 1 supplies no host_dtype tags. No teammate's compute
+implementation, shared driver, Merlin or model2MLIR was changed.
 
-Once confirmed, check in the v1 JSON schema and a Stage A golden manifest with
-input indices 0/1 (activation_fp8/weight_fp8_kn), output index 0 (output_bf16),
-host output f32, origin (0,0), shape [32,32], grid [1,1,1], and bases
-0x90000000/0x90001000. Then enable generation, record-copying, schema validation,
-and the complete stage-6 contract test. Until then metadata tests distinguish
-ABI checks and transport from a complete manifest producer.
+The standalone tool registers Tensor and Linalg, while the Python plugin's
+`registerAtlasDialects` currently registers neither. Native Python mixed-IR
+parsing therefore fails on `tensor.extract_slice`; this needs a coordinated
+plugin registration/linking change alongside the upstream compute work. The
+Python options/export test exercises direct TTIR tiles; the standalone tool
+exercises the mixed Tensor boundary path. This lane leaves plugin.cpp intact.
 
-## Integration limits
+## Validation (November 6, 2026)
 
-The checkout still has placeholder passes 1–4 and identity-only compute type
-conversion. The raw canonical matmul+ReLU fixture needs Pass 1's dtype tags and
-Pass 4's f32-to-BF16 legalization before Pass 5. The independent Pass 5 fixture
-is prepared at that boundary without editing the shared raw fixture. Full
-matmul conversion also awaits Devansh's dot/transpose/ReLU/type patterns.
-Neither their files nor the driver was modified.
+- `make build.plugin build.tools`: passed, with UV_CACHE_DIR under /tmp.
+- Wheel build: passed; the archive includes the version-1 JSON schema.
+- Assign-slots: 29/29 lit tests, including five Python slice-contract tests.
+- Boundary: 7/7 lit tests; kernel metadata: 6/6.
+- Compiler export: 9/9 Python tests (one lit wrapper).
+- Contract verifier: 8/8 lit tests, including Stages 6 and 7.
+- Selected lane suite: 45/45 passed.
+- Full repository lit suite: 61 passed, one expected failure, one failure.
+  The sole failure is pipeline/stage-a.mlir, blocked by missing host_dtype
+  tags from upstream Pass 1. The target Stage A test remains an expected failure.
+- Ruff, clang-format verification, git diff --check, merge-marker scan and
+  unmerged-index checks passed. Lit used Python's fork start method because
+  the sandbox prohibits the forkserver socket.
+
+The real matmul+ReLU TTIR fixture was separately attempted through the full
+pipeline, Stage 7 contract and virtual stream verifier; it fails at the same
+missing Pass 1 tags. The mixed two-tile copy succeeds through the standalone
+native pipeline and final verifiers. No compute/shape/dtype implementation was
+substituted to conceal the Stage A blocker. Logs, test JSON and wheel artifacts
+are in /tmp/triton-atlas-resume-backup/.

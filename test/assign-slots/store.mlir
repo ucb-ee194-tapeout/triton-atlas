@@ -1,4 +1,4 @@
-// RUN: triton-atlas-opt %s --ttatlas-assign-slots --ttatlas-verify-contract=stage=5 | FileCheck %s
+// RUN: triton-atlas-opt %s --ttatlas-assign-slots --ttatlas-verify-contract=stage=6 | FileCheck %s
 // RUN: triton-atlas-opt %s --ttatlas-assign-slots | FileCheck %s
 // RUN: triton-atlas-opt %s --ttatlas-assign-slots | FileCheck %s
 // CHECK: ttatlas.slot = #ttatlas.slot<index = 0, arg = 0, role = constant_bf16
@@ -18,7 +18,9 @@ module {
     %p = tt.addptr %base, %offsets : tensor<32x32x!tt.ptr<bf16>>, tensor<32x32xi32>
     %x = tt.load %p {ttatlas.host_dtype = bf16} : tensor<32x32x!tt.ptr<bf16>>
     tt.store %p, %x {ttatlas.host_dtype = f32} : tensor<32x32x!tt.ptr<bf16>>
-    tt.store %p, %x {ttatlas.host_dtype = f32} : tensor<32x32x!tt.ptr<bf16>>
+    %delta = arith.constant dense<1024> : tensor<32x32xi32>
+    %q = tt.addptr %p, %delta : tensor<32x32x!tt.ptr<bf16>>, tensor<32x32xi32>
+    tt.store %q, %x {ttatlas.host_dtype = f32} : tensor<32x32x!tt.ptr<bf16>>
     tt.return
   }
 }

@@ -1,4 +1,5 @@
 // Pass 6: assign slots after Linalg shape and dtype legalization.
+#include "TritonToAtlasVirtual/BoundaryTiles.h"
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "mlir/IR/AffineMap.h"
@@ -6,6 +7,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include <limits>
@@ -135,19 +137,20 @@ std::optional<PointerLane> pointerAt(Value value, Coordinates at, FuncOp func,
 
 // Derive FP8 operand orientation from actual dot uses. A transposed source
 // consumed as B is host NK; a direct B operand is already KN.
-std::optional<ttatlas::SlotRole> roleFor(LoadOp load) {
+std::optional<ttatlas::SlotRole> roleFor(Value tile) {
   using Role = ttatlas::SlotRole;
-  SmallVector<std::pair<Value, bool>> pending{{load.getResult(), false}};
+  SmallVector<std::pair<Value, bool>> pending{{tile, false}};
   SmallVector<Role> roles;
   unsigned visits = 0;
-  bool bf16 = getElementTypeOrSelf(load.getType()).isBF16();
+  bool bf16 = getElementTypeOrSelf(tile.getType()).isBF16();
   while (!pending.empty()) {
     if (++visits > 256)
       return std::nullopt;
     auto [value, transposed] = pending.pop_back_val();
     for (OpOperand &use : value.getUses()) {
       Operation *user = use.getOwner();
-      if (isa<DotOp>(user)) {
+      if (isa<DotOp>(user) ||
+          user->getName().getStringRef() == "linalg.matmul") {
         if (use.getOperandNumber() == 0 && !transposed)
           roles.push_back(Role::activation_fp8);
         else if (use.getOperandNumber() == 1)
@@ -159,8 +162,21 @@ std::optional<ttatlas::SlotRole> roleFor(LoadOp load) {
         if (trans.getOrder() != ArrayRef<int32_t>{1, 0})
           return std::nullopt;
         pending.emplace_back(trans.getResult(), !transposed);
-      } else if (isa<arith::ExtFOp, arith::TruncFOp>(user)) {
+      } else if (user->getName().getStringRef() == "linalg.transpose") {
+        auto permutation =
+            user->getAttrOfType<DenseI64ArrayAttr>("permutation");
+        if (use.getOperandNumber() != 0 || !permutation ||
+            permutation.asArrayRef() != ArrayRef<int64_t>{1, 0} ||
+            user->getNumResults() != 1)
+          return std::nullopt;
+        pending.emplace_back(user->getResult(0), !transposed);
+      } else if (isa<arith::ExtFOp, arith::TruncFOp, tensor::CastOp>(user)) {
         pending.emplace_back(user->getResult(0), transposed);
+      } else if (bf16 && user->getName().getStringRef() == "linalg.generic") {
+        bool add = false;
+        user->walk([&](arith::AddFOp) { add = true; });
+        if (add)
+          roles.push_back(Role::bias_bf16);
       } else if (bf16 && isa<arith::AddFOp>(user)) {
         roles.push_back(Role::bias_bf16);
       }
@@ -185,158 +201,220 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
     for (FuncOp func : getOperation().getOps<FuncOp>()) {
       int64_t nextInput = 0, nextOutput = 0;
       bool sawStore = false;
-      SmallVector<ttatlas::SlotAttr> inputSlots;
+      SmallVector<ttatlas::SlotAttr> inputSlots, outputSlots;
+      llvm::DenseMap<unsigned, int64_t> argumentWidths;
+      SmallVector<BoundaryTile> tiles;
+      llvm::SmallPtrSet<Operation *, 32> scaffolding;
       func.walk([&](Operation *op) {
-        if (!isa<LoadOp, StoreOp>(op))
-          return;
-        auto reject = [&](const Twine &reason) {
-          ttatlas::emitUnsupported(op, reason);
-          invalid = true;
-        };
-        if (func.getBody().getBlocks().size() != 1 ||
+        if (isa<LoadOp, StoreOp>(op) &&
             op->getBlock() != &func.getBody().front()) {
-          reject("slot assignment requires a single straight-line entry block");
-          return;
+          ttatlas::emitUnsupported(
+              op,
+              "slot assignment requires a single straight-line entry block");
+          invalid = true;
         }
-        auto load = dyn_cast<LoadOp>(op);
-        auto store = dyn_cast<StoreOp>(op);
-        Value ptr = load ? load.getPtr() : store.getPtr();
-        Value mask = load ? load.getMask() : store.getMask();
-        if (mask) {
-          reject("masked accesses are unsupported; a whole unmasked tile is "
-                 "required");
-          return;
-        }
-        if (load && load.getIsVolatile()) {
-          reject("volatile loads cannot be represented by an input slot");
-          return;
-        }
-        auto host = op->getAttrOfType<TypeAttr>(ttatlas::kHostDtype);
-        if (!host) {
-          reject("missing ttatlas.host_dtype from Pass 1");
-          return;
-        }
-        auto tensor = dyn_cast<RankedTensorType>(ptr.getType());
-        if (!tensor || tensor.getShape() != ArrayRef<int64_t>{32, 32}) {
-          reject("expected a static 32x32 tensor of pointers; 1-D bias needs "
-                 "the Stage B driver-broadcast contract");
-          return;
-        }
-        auto pointer = dyn_cast<PointerType>(tensor.getElementType());
-        if (!pointer) {
-          reject("tensor/block pointers are unsupported");
-          return;
-        }
-        Type element = pointer.getPointeeType();
-        if (!element.isBF16() && !isa<Float8E4M3FNType>(element)) {
-          reject("expected legalized BF16 or FP8 E4M3FN elements");
-          return;
-        }
-        if (store && !element.isBF16()) {
-          reject("FP8 stores have no Atlas virtual output boundary operation");
-          return;
-        }
-        SmallVector<int64_t> logicalShape{32, 32};
-        auto pad = op->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad);
-        if (store && !pad)
-          if (Operation *producer = store.getValue().getDefiningOp())
-            pad = producer->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad);
-        if (pad) {
-          if (pad.getLogicalShape() != ArrayRef<int64_t>{32, 32}) {
+      });
+      if (failed(collectBoundaryTiles(func, tiles, scaffolding))) {
+        invalid = true;
+        continue;
+      }
+      for (const BoundaryTile &tile : tiles) {
+        // Analyze each slice independently using the parent pointer expression.
+        auto analyze = [&]() {
+          Operation *op = tile.memory;
+          auto reject = [&](const Twine &reason) {
+            ttatlas::emitUnsupported(op, reason);
+            invalid = true;
+          };
+          if (func.getBody().getBlocks().size() != 1 ||
+              op->getBlock() != &func.getBody().front()) {
             reject(
-                "partial padded boundaries require Stage B packing semantics");
+                "slot assignment requires a single straight-line entry block");
             return;
           }
-          logicalShape.assign(pad.getLogicalShape().begin(),
-                              pad.getLogicalShape().end());
-        }
-        if (load && sawStore) {
-          reject("loads after stores require memory-dependence analysis");
-          return;
-        }
-        sawStore |= bool(store);
-        auto origin = pointerAt(ptr, {0, 0}, func);
-        if (!origin) {
-          reject("cannot prove a static pointer expression rooted in a "
-                 "function pointer argument (dynamic strides/offsets or "
-                 "unsupported transformations)");
-          return;
-        }
-        if (origin->offset < 0 ||
-            origin->offset > std::numeric_limits<int64_t>::max() - 1023 ||
-            origin->offset % 32) {
-          reject("tile offset must be nonnegative, row-aligned, and fit signed "
-                 "i64");
-          return;
-        }
-        for (int64_t row = 0; row < 32; ++row)
-          for (int64_t col = 0; col < 32; ++col) {
-            auto lane = pointerAt(ptr, {row, col}, func);
-            if (!lane || lane->argument != origin->argument ||
-                lane->offset != origin->offset + row * 32 + col) {
-              reject("cannot prove contiguous row-major tile: expected offset "
-                     "+ row * 32 + column at every lane");
+          auto load = dyn_cast<LoadOp>(op);
+          auto store = dyn_cast<StoreOp>(op);
+          Value ptr = load ? load.getPtr() : store.getPtr();
+          Value mask = load ? load.getMask() : store.getMask();
+          if (mask) {
+            reject("masked accesses are unsupported; a whole unmasked tile is "
+                   "required");
+            return;
+          }
+          if (load && load.getIsVolatile()) {
+            reject("volatile loads cannot be represented by an input slot");
+            return;
+          }
+          auto host = op->getAttrOfType<TypeAttr>(ttatlas::kHostDtype);
+          if (!host) {
+            reject("missing ttatlas.host_dtype from Pass 1");
+            return;
+          }
+          auto tensor = dyn_cast<RankedTensorType>(ptr.getType());
+          if (!tensor || tensor.getRank() != 2 || !tensor.hasStaticShape()) {
+            reject("expected a static 32x32 tensor of pointers; 1-D bias needs "
+                   "the Stage B driver-broadcast contract");
+            return;
+          }
+          auto pointer = dyn_cast<PointerType>(tensor.getElementType());
+          if (!pointer) {
+            reject("tensor/block pointers are unsupported");
+            return;
+          }
+          Type element = pointer.getPointeeType();
+          if (!element.isBF16() && !isa<Float8E4M3FNType>(element)) {
+            reject("expected legalized BF16 or FP8 E4M3FN elements");
+            return;
+          }
+          if (store && !element.isBF16()) {
+            reject(
+                "FP8 stores have no Atlas virtual output boundary operation");
+            return;
+          }
+          SmallVector<int64_t> logicalShape{32, 32};
+          auto pad = tile.tag->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad);
+          bool tilePad = pad && tile.tag != op;
+          if (!pad)
+            pad = op->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad);
+          if (store && !pad)
+            if (Operation *producer = store.getValue().getDefiningOp())
+              pad = producer->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad);
+          if (pad) {
+            auto shape = pad.getLogicalShape();
+            bool full = shape.size() == 2;
+            for (unsigned axis = 0; full && axis < 2; ++axis)
+              full = tilePad ? shape[axis] == 32
+                             : shape[axis] <= tensor.getDimSize(axis) &&
+                                   shape[axis] >= tile.offsets[axis] + 32;
+            if (!full) {
+              reject("partial padded boundaries require Stage B packing "
+                     "semantics");
               return;
             }
           }
-        auto role = load ? roleFor(load)
-                         : std::optional<ttatlas::SlotRole>(
-                               ttatlas::SlotRole::output_bf16);
-        if (!role) {
-          reject("cannot infer a unique activation/weight role from dot uses");
-          return;
-        }
-        if (pad && load && pad.getNeutral() == ttatlas::PadNeutral::neg_inf)
-          role = ttatlas::SlotRole::mask_bf16;
-        if (*role == ttatlas::SlotRole::mask_bf16 && !element.isBF16()) {
-          reject("a mask slot requires BF16 elements");
-          return;
-        }
-        MLIRContext *context = op->getContext();
-        auto tileOrigin = AffineMapAttr::get(
-            AffineMap::get(0, 6,
-                           {getAffineConstantExpr(origin->offset / 32, context),
-                            getAffineConstantExpr(0, context)},
-                           context));
-        int64_t index = load ? nextInput : nextOutput;
-        // Input reuse includes source argument, exact origin, role, shape and
-        // original host dtype. Stores remain distinct ordered output events.
-        for (ttatlas::SlotAttr previous : inputSlots)
-          if (load && previous.getArg() == origin->argument.getArgNumber() &&
-              previous.getTileOrigin() == tileOrigin &&
-              previous.getRole() == *role &&
-              previous.getLogicalShape() == ArrayRef<int64_t>(logicalShape) &&
-              previous.getHostDtype() == host.getValue()) {
+          if (load && sawStore) {
+            reject("loads after stores require memory-dependence analysis");
+            return;
+          }
+          sawStore |= bool(store);
+          const int64_t width = tensor.getDimSize(1);
+          auto origin = pointerAt(ptr, tile.offsets, func);
+          if (!origin) {
+            reject("cannot prove a static pointer expression rooted in a "
+                   "function pointer argument (dynamic strides/offsets or "
+                   "unsupported transformations)");
+            return;
+          }
+          if (origin->offset < 0 ||
+              origin->offset > std::numeric_limits<int64_t>::max() - 31 ||
+              width >
+                  (std::numeric_limits<int64_t>::max() - origin->offset - 31) /
+                      31 ||
+              origin->offset % width > width - 32) {
+            reject(
+                "tile offset must be nonnegative, row-aligned, and fit signed "
+                "i64");
+            return;
+          }
+          for (int64_t row = 0; row < 32; ++row)
+            for (int64_t col = 0; col < 32; ++col) {
+              auto lane = pointerAt(
+                  ptr, {tile.offsets[0] + row, tile.offsets[1] + col}, func);
+              if (!lane || lane->argument != origin->argument ||
+                  lane->offset != origin->offset + row * width + col) {
+                reject(
+                    "cannot prove contiguous row-major tile: expected offset "
+                    "+ row * 32 + column at every lane");
+                return;
+              }
+            }
+          auto [view, inserted] = argumentWidths.try_emplace(
+              origin->argument.getArgNumber(), width);
+          if (!inserted && view->second != width) {
+            reject("one pointer argument has incompatible host row widths");
+            return;
+          }
+          auto role = load ? roleFor(tile.value)
+                           : std::optional<ttatlas::SlotRole>(
+                                 ttatlas::SlotRole::output_bf16);
+          if (!role) {
+            reject(
+                "cannot infer a unique activation/weight role from dot uses");
+            return;
+          }
+          if (pad && load && pad.getNeutral() == ttatlas::PadNeutral::neg_inf)
+            role = ttatlas::SlotRole::mask_bf16;
+          if (*role == ttatlas::SlotRole::mask_bf16 && !element.isBF16()) {
+            reject("a mask slot requires BF16 elements");
+            return;
+          }
+          MLIRContext *context = op->getContext();
+          auto tileOrigin = AffineMapAttr::get(AffineMap::get(
+              0, 6,
+              {getAffineConstantExpr(origin->offset / width, context),
+               getAffineConstantExpr(origin->offset % width, context)},
+              context));
+          int64_t index = load ? nextInput : nextOutput;
+          // Input reuse includes source argument, exact origin, role, shape and
+          // original host dtype. Stores remain distinct ordered output events.
+          for (ttatlas::SlotAttr previous : load ? inputSlots : outputSlots) {
+            if (previous.getArg() != origin->argument.getArgNumber() ||
+                previous.getTileOrigin() != tileOrigin)
+              continue;
+            if (store) {
+              reject("repeated writes to one logical output tile require "
+                     "memory-dependence analysis");
+              return;
+            }
+            if (previous.getRole() != *role ||
+                previous.getLogicalShape() != ArrayRef<int64_t>(logicalShape) ||
+                previous.getHostDtype() != host.getValue()) {
+              reject("one logical input tile has incompatible roles or host "
+                     "representations");
+              return;
+            }
             index = previous.getIndex();
             break;
           }
-        if (index > std::numeric_limits<int32_t>::max()) {
-          reject("slot index exceeds Atlas signed i32 range");
-          return;
-        }
-        auto emitError = [&]() { return op->emitError(); };
-        auto slot = ttatlas::SlotAttr::getChecked(
-            llvm::function_ref<InFlightDiagnostic()>(emitError), context,
-            static_cast<int32_t>(index),
-            static_cast<int32_t>(origin->argument.getArgNumber()), *role,
-            tileOrigin, ArrayRef<int64_t>(logicalShape), host.getValue());
-        if (!slot) {
-          invalid = true;
-          return;
-        }
-        if (load && index == nextInput) {
-          ++nextInput;
-          inputSlots.push_back(slot);
-        }
-        if (store)
-          ++nextOutput;
-        pending.push_back({op, slot});
-      });
+          if (index > std::numeric_limits<int32_t>::max()) {
+            reject("slot index exceeds Atlas signed i32 range");
+            return;
+          }
+          auto emitError = [&]() { return op->emitError(); };
+          auto slot = ttatlas::SlotAttr::getChecked(
+              llvm::function_ref<InFlightDiagnostic()>(emitError), context,
+              static_cast<int32_t>(index),
+              static_cast<int32_t>(origin->argument.getArgNumber()), *role,
+              tileOrigin, ArrayRef<int64_t>(logicalShape), host.getValue());
+          if (!slot) {
+            invalid = true;
+            return;
+          }
+          if (load && index == nextInput) {
+            ++nextInput;
+            inputSlots.push_back(slot);
+          }
+          if (store) {
+            ++nextOutput;
+            outputSlots.push_back(slot);
+          }
+          pending.push_back({tile.tag, slot});
+        };
+        analyze();
+      }
     }
     if (invalid) {
       signalPassFailure();
       return;
     }
+    getOperation().walk([&](Operation *op) {
+      if (auto load = dyn_cast<LoadOp>(op);
+          load && !isBoundaryTile(load.getType()))
+        op->removeAttr(ttatlas::kSlot);
+      if (auto store = dyn_cast<StoreOp>(op);
+          store && !isBoundaryTile(store.getValue().getType()))
+        op->removeAttr(ttatlas::kSlot);
+    });
     for (const AssignedSlot &assigned : pending)
       assigned.op->setAttr(ttatlas::kSlot, assigned.slot);
   }
