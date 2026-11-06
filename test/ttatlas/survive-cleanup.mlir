@@ -1,8 +1,8 @@
 // RUN: triton-atlas-opt %s --canonicalize --cse | FileCheck %s
 
-// The pipeline runs canonicalize and CSE after passes 2, 3 and 4, and later passes read the tags earlier passes
-// set. This checks the tags on loads, stores and dots survive both, and that CSE keeps two loads with different
-// slots apart while merging two identical ones.
+// The pipeline runs canonicalize and CSE after passes 2, 4 and 5, and later passes read the tags earlier passes
+// set. This checks the tags on loads, stores and dots survive both (on tt.dot after pass 2, on linalg.matmul after
+// passes 4 and 5), and that CSE keeps two loads with different slots apart while merging two identical ones.
 
 #o = affine_map<()[s0, s1, s2, s3, s4, s5] -> (0, 0)>
 tt.func @k(%p: !tt.ptr<f8E4M3FN>, %q: !tt.ptr<bf16>) {
@@ -24,4 +24,16 @@ tt.func @k(%p: !tt.ptr<f8E4M3FN>, %q: !tt.ptr<bf16>) {
   // CHECK: tt.store {{.*}}ttatlas.host_dtype = f32, ttatlas.slot = #ttatlas.slot<index = 0, arg = 1, role = output_bf16
   tt.store %t, %o16 {ttatlas.host_dtype = f32, ttatlas.slot = #ttatlas.slot<index = 0, arg = 1, role = output_bf16, tile_origin = #o, logical_shape = [32, 32], host_dtype = f32>} : tensor<32x32x!tt.ptr<bf16>>
   tt.return
+}
+
+// After passes 4 and 5 the MXU unit sits on linalg.matmul.
+func.func @tiled(%a: tensor<32x32xf8E4M3FN>, %b: tensor<32x32xf8E4M3FN>) -> tensor<32x32xf32> {
+  %zero = arith.constant 0.000000e+00 : f32
+  %empty = tensor.empty() : tensor<32x32xf32>
+  %acc = linalg.fill ins(%zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
+  // CHECK: linalg.matmul {ttatlas.mxu = 0 : i32}
+  %m0 = linalg.matmul {ttatlas.mxu = 0 : i32} ins(%a, %b : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  // CHECK: linalg.matmul {ttatlas.mxu = 0 : i32}
+  %m1 = linalg.matmul {ttatlas.mxu = 0 : i32} ins(%a, %b : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%m0 : tensor<32x32xf32>) -> tensor<32x32xf32>
+  return %m1 : tensor<32x32xf32>
 }

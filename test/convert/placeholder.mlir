@@ -1,6 +1,6 @@
 // RUN: triton-atlas-opt %S/../fixtures/mlp.ttir.mlir --convert-triton-to-atlas-virtual | FileCheck %s
 
-// Pass 6 (convert-triton-to-atlas-virtual) is still a placeholder: it runs and leaves the kernel unchanged. This folder is where its
+// Pass 7 (convert-triton-to-atlas-virtual) is still a placeholder: it runs and leaves the kernel unchanged. This folder is where its
 // tests go (one file per case); replace this file with the first real one.
 
 // CHECK: tt.func public @mlp
