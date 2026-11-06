@@ -1,4 +1,4 @@
-// RUN: triton-atlas-opt %s --ttatlas-assign-slots --ttatlas-verify-contract=stage=5 | FileCheck %s
+// RUN: triton-atlas-opt %s --ttatlas-assign-slots --ttatlas-verify-contract=stage=6 | FileCheck %s
 // CHECK: index = 0, arg = 0, role = activation_fp8
 // CHECK: index = 1, arg = 1, role = weight_fp8_kn
 // CHECK: index = 0, arg = 2, role = output_bf16

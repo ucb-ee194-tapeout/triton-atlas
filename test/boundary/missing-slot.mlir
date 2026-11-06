@@ -1,5 +1,5 @@
 // RUN: not triton-atlas-opt %s --convert-triton-to-atlas-virtual 2>&1 | FileCheck %s
-// CHECK: tt.load/tt.store is missing #ttatlas.slot from Pass 5
+// CHECK: boundary tile is missing #ttatlas.slot from Pass 6
 module {
   tt.func @copy(%a: !tt.ptr<bf16>, %b: !tt.ptr<bf16>) {
     %p = tt.splat %a : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>

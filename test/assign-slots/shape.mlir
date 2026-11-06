@@ -1,5 +1,5 @@
 // RUN: not triton-atlas-opt %s --ttatlas-assign-slots 2>&1 | FileCheck %s
-// CHECK: expected a static 32x32 tensor of pointers
+// CHECK: expected a static 32x32 tile or larger rank-two boundary tensor
 module {
   tt.func @tile(%a: !tt.ptr<bf16>) {
     %r = tt.make_range {start = 0 : i32, end = 16 : i32} : tensor<16xi32>

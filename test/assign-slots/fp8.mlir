@@ -1,4 +1,4 @@
-// RUN: triton-atlas-opt %s --ttatlas-assign-slots --ttatlas-verify-contract=stage=5 | FileCheck %s
+// RUN: triton-atlas-opt %s --ttatlas-assign-slots --ttatlas-verify-contract=stage=6 | FileCheck %s
 // RUN: triton-atlas-opt %s --ttatlas-assign-slots | FileCheck %s
 // CHECK: ttatlas.slot = #ttatlas.slot<index = 0, arg = 0, role = activation_fp8, tile_origin = #map, logical_shape = [32, 32], host_dtype = f8E4M3FN>
 module {

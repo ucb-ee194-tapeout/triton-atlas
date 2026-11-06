@@ -1,5 +1,7 @@
-// RUN: not triton-atlas-opt %s --convert-triton-to-atlas-virtual --ttatlas-verify-contract=stage=6 2>&1 | FileCheck %s
-// CHECK: func.func without ttatlas.kernel
+// RUN: triton-atlas-opt %s --convert-triton-to-atlas-virtual --ttatlas-verify-contract=stage=7 --verify-atlas-virtual-stream | FileCheck %s
+// CHECK: ttatlas.kernel =
+// CHECK-SAME: version
+// CHECK-SAME: legalized
 // The full manifest awaits the confirmed v1 serialization golden example.
 module {
   tt.func @copy(%a: !tt.ptr<bf16>, %b: !tt.ptr<bf16>) {
