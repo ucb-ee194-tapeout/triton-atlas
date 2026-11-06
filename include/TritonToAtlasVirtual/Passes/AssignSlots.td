@@ -6,4 +6,7 @@ def AssignSlots : Pass<"ttatlas-assign-slots", "mlir::ModuleOp"> {
     Out: every load and store carries #ttatlas.slot<index, arg, role, tile_origin, logical_shape, host_dtype>, proven
     to be one whole tile (or a 1-D bias) of one pointer argument. The only pass that numbers slots.
   }];
+
+  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.
+  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect"];
 }

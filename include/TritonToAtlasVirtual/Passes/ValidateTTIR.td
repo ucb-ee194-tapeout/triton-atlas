@@ -9,4 +9,7 @@ def ValidateTTIR : Pass<"ttatlas-validate-ttir", "mlir::ModuleOp"> {
     own: when a later pass learns to lower something, its op is accepted here in the same change, so the set of
     accepted kernels grows over time.
   }];
+
+  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.
+  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect"];
 }

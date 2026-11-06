@@ -10,6 +10,7 @@ def ConvertTritonToAtlasVirtual : Pass<"convert-triton-to-atlas-virtual", "mlir:
     ttatlas.kernel (JSON, schema v1). An op with no pattern is an error naming it.
   }];
 
-  // The ops this pass creates; MLIR loads these dialects before the pass runs.
-  let dependentDialects = ["mlir::atlas::AtlasDialect", "mlir::func::FuncDialect", "mlir::arith::ArithDialect"];
+  // The ops this pass creates, and the ttatlas tags it reads; MLIR loads these dialects before the pass runs.
+  let dependentDialects = ["mlir::atlas::AtlasDialect", "mlir::func::FuncDialect", "mlir::arith::ArithDialect",
+                           "mlir::ttatlas::TTAtlasDialect"];
 }

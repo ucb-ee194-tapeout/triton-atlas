@@ -6,4 +6,7 @@ def LegalizeShapes : Pass<"ttatlas-legalize-shapes", "mlir::ModuleOp"> {
     Out: every 2-D value is exactly 32x32 (a 1:N conversion: a larger value becomes a grid of tile values). Dots
     carry ttatlas.mxu, K > 32 contractions ttatlas.k_chain, padded values ttatlas.pad on their defining ops.
   }];
+
+  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.
+  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect"];
 }

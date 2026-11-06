@@ -138,7 +138,7 @@ add_subdirectory(third_party/atlas-mlir ${CMAKE_CURRENT_BINARY_DIR}/atlas-mlir E
 add_subdirectory(include)
 
 add_library(TritonAtlasBackend SHARED plugin.cpp)
-add_dependencies(TritonAtlasBackend MLIRAtlas TritonToAtlasVirtualPassIncGen)
+add_dependencies(TritonAtlasBackend MLIRAtlas TTAtlasIncGen TritonToAtlasVirtualPassIncGen)
 set_target_properties(TritonAtlasBackend PROPERTIES OUTPUT_NAME triton_atlas_backend)
 add_subdirectory(lib)
 add_subdirectory(tools)

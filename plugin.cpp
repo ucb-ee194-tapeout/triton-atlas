@@ -5,6 +5,7 @@
 // (MIT).
 #include "Atlas/AtlasDialect.h"
 #include "Atlas/AtlasVirtualVerification.h"
+#include "TTAtlas/TTAtlas.h"
 #include "TritonToAtlasVirtual/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
@@ -19,10 +20,11 @@
 using namespace mlir::triton;
 
 // Atlas virtual IR lives in func.func and uses arith constants (atlas-mlir
-// examples/handoff/virtual_mlp).
+// examples/handoff/virtual_mlp). ttatlas holds the tags our passes pass to each
+// other.
 static void registerAtlasDialects(mlir::DialectRegistry *registry) {
-  registry->insert<mlir::atlas::AtlasDialect, mlir::func::FuncDialect,
-                   mlir::arith::ArithDialect>();
+  registry->insert<mlir::atlas::AtlasDialect, mlir::ttatlas::TTAtlasDialect,
+                   mlir::func::FuncDialect, mlir::arith::ArithDialect>();
   // func promises an inliner interface that lives in a separate extension;
   // without it Triton's inliner pass aborts
   // ("promised by dialect 'func' but never implemented"). The wheel doesn't

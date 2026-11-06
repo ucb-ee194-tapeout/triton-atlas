@@ -6,4 +6,7 @@ def Normalize : Pass<"ttatlas-normalize", "mlir::ModuleOp"> {
     Out: every tt.dot accumulator is zero or the previous dot of the same K chain; a bias moves to a separate add
     (undoing Triton's combine); unrolled K-loop dots carry ttatlas.k_chain; no scf.for with a constant trip count.
   }];
+
+  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.
+  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect"];
 }
