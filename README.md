@@ -3,9 +3,10 @@
 A Triton backend for Atlas, the NPU in the Penguin SoC. It compiles `@triton.jit` kernels to Atlas virtual IR, the
 input of [atlas-mlir](https://github.com/ucb-bar/atlas-mlir).
 
-**Status:** the pipeline runs all seven passes. Pass 4 validates existing 32-element vectors and 32×32 compute
-tiles and tags matmuls for MXU0. Pass 7 retains the initial static 32×32 two-layer FP8 MLP lowering; the other
-passes are placeholders. Launching a kernel still stops at a stub.
+**Status:** the pipeline runs all seven passes. Pass 4 tiles statically sized linalg operations at 32, fuses
+tile producers, fully unrolls static tile loops, recognizes supported compile-time edge masks, and tags matmuls
+for MXU0. Pass 7 retains the initial static 32×32 two-layer FP8 MLP lowering; several other passes remain
+placeholders. Launching a kernel still stops at a stub.
 
 ```text
 @triton.jit kernel
@@ -87,7 +88,7 @@ triton-atlas/
 | Run the tests | `make test` |
 | Run some tests | `make test T=<file or folder>`; `LIT_FILTER=<regex>` picks by name |
 | Run passes on one file | `triton-atlas-opt kernel.ttir --ttatlas-pipeline` (all of them) or `--<pass-name>` (one) |
-| Check pass 4 tile shapes and matmul tags | `triton-atlas-opt input.mlir --ttatlas-legalize-shapes` |
+| Run pass 4 tiling, mask checks, and MXU tagging | `triton-atlas-opt input.mlir --ttatlas-legalize-shapes` |
 | Compile a kernel | `uv run python my_kernel.py` |
 | Format and lint | `make format` (the git hooks run it on commit) |
 | Build the wheel | `make build.wheel` |
@@ -108,9 +109,22 @@ Atlas hardware facts (tile size, slot size, MXU limits, scale codes, DRAM window
 that depends on the hardware in a way a constant can't hold gets an `atlas-hw:` comment with its source.
 `git grep -n "atlas-hw:\|target::"` lists every place the hardware reaches into the passes.
 
-Pass 4's initial slice only accepts linalg tensors already sized as 32 or 32×32, and tags each matmul with
-`ttatlas.mxu = 0 : i32`. Tiling larger values, slice reassembly, K-chain unrolling, reductions, and padding are not
-implemented yet.
+Pass 4 accepts static rank-1 and rank-2 linalg tensors whose dimensions and iteration extents are multiples of
+32. Larger linalg operations are tiled with MLIR's linalg tiling interface; static tile loops are unrolled, so a
+split-K matmul becomes an explicit chain. Tensor slices are fused into their linalg consumers where MLIR supports
+the pattern. Every matmul is tagged `ttatlas.mxu = 0 : i32` (MXU0 is the initial policy).
+
+For masked `tt.load` and `tt.store`, pass 4 recognizes `slt` comparisons of `tt.make_range` against a scalar
+constant, including `andi` combinations and the usual `expand_dims`/`broadcast` wrappers. The load's explicit
+other value or the stored value's inferred consumer neutral must be zero (add/matmul) or negative infinity
+(max-reduction); the load neutral must agree with its consumers. The pass attaches `ttatlas.pad` metadata with
+the logical shape. Dynamic shapes, non-multiple-of-32 linalg extents, unsupported mask expressions, and padding
+whose neutral element cannot be established are rejected with an unsupported diagnostic. This first slice does
+not yet turn arbitrary sub-32 or irregular linalg shapes into padded 32×32 compute tiles.
+
+Focused Pass 4 lit coverage is in `test/legalize-shapes/`. Run it with
+`make test T=test/legalize-shapes`; run the stage-contract fixtures separately with
+`make test T=test/verify-contract`.
 
 Versions: Triton exactly 3.9.0 and its LLVM commit (both checked at build time); atlas-mlir pinned on its default
 branch.

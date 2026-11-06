@@ -1,7 +1,7 @@
 // RUN: triton-atlas-opt %S/../fixtures/mlp.ttir.mlir --ttatlas-legalize-shapes | FileCheck %s
 
-// Pass 4 (ttatlas-legalize-shapes) is still a placeholder: it runs and leaves the kernel unchanged. This folder is where its
-// tests go (one file per case); replace this file with the first real one.
+// Pass 3 is still a placeholder, so this TTIR fixture contains no linalg work
+// for pass 4 to tile. Direct linalg coverage is in legalize-shapes.mlir.
 
 // CHECK: tt.func public @mlp
 // CHECK: tt.load

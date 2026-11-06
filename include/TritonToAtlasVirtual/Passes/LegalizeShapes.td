@@ -13,5 +13,8 @@ def LegalizeShapes : Pass<"ttatlas-legalize-shapes", "mlir::ModuleOp"> {
   }];
 
   // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.
-  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect"];
+  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect",
+                           "mlir::linalg::LinalgDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::tensor::TensorDialect"];
 }

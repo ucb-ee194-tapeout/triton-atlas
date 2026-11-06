@@ -167,6 +167,11 @@ target_link_libraries(
     PRIVATE
         $<TARGET_FILE:MLIRAtlas>
         "${LLVM_LIBRARY_DIR}/libMLIRFuncInlinerExtension.a"
+        MLIRLinalgDialect
+        MLIRLinalgTransforms
+        MLIRSCFDialect
+        MLIRSCFTransforms
+        MLIRTensorDialect
         -Wl,--no-undefined
         -Wl,--gc-sections
         -Wl,--no-as-needed
