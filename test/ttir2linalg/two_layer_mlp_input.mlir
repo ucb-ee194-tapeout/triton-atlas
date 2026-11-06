@@ -3,7 +3,7 @@
 // Genuine offline Triton 3.6.0 TTIR input from ttir2linalg's
 // amy/triton-atlas-compiler fixture. The lowering is intentionally bounded to
 // this static 32x32 FP8 two-layer MLP.
-// CHECK-LABEL: func.func @fp8_two_layer
+// CHECK-LABEL: func.func public @fp8_two_layer
 // CHECK: atlas.virtual_start
 // CHECK: atlas.virtual_input_fp8
 // CHECK: atlas.virtual_xlu_transpose
@@ -12,7 +12,7 @@
 // CHECK: atlas.virtual_pack_fp8
 // CHECK: atlas.virtual_mxu_matmul
 // CHECK: atlas.virtual_output_bf16
-// CHECK: func.return
+// CHECK: return
 
 #loc = loc("/bwrcq/home/amy.yao/ttir2linalg/kernels/atlas_jit_kernels.py":33:0)
 #loc26 = loc("X"(#loc))

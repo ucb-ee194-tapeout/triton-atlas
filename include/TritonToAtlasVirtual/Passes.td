@@ -8,9 +8,9 @@ include "mlir/Pass/PassBase.td"
 def ConvertTritonToAtlasVirtual : Pass<"convert-triton-to-atlas-virtual", "mlir::ModuleOp"> {
   let summary = "Convert TTIR kernels to Atlas virtual ops";
   let description = [{
-    Rewrites each `tt.func` into a `func.func` of Atlas virtual ops on 32x32 tiles: tile loads and stores become
-    `atlas.virtual_input_*` / `atlas.virtual_output_bf16`, `tt.dot` becomes an MXU matmul, and elementwise ops
-    become VPU ops. Anything it can't map is an error naming the op.
+    Lowers the initial static two-layer 32x32 FP8 MLP case from one `tt.func` to a `func.func` Atlas virtual stream.
+    Unsupported functions and operation patterns fail with diagnostics; general elementwise, attention, and
+    multi-kernel module lowering are not implemented yet.
   }];
 
   // The ops this pass creates; MLIR loads these dialects before the pass runs.

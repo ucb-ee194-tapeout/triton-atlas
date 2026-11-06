@@ -31,7 +31,9 @@ using llvm::SmallPtrSet;
 using llvm::SmallVector;
 using llvm::StringRef;
 
-static StringRef opName(Operation *op) { return op->getName().getStringRef(); }
+static StringRef ttirOperationName(Operation *op) {
+  return op->getName().getStringRef();
+}
 
 static bool hasTensorShape(Value value, int64_t rows, int64_t cols) {
   auto type = dyn_cast<RankedTensorType>(value.getType());
@@ -63,7 +65,7 @@ static bool isF32Tile(Value value) {
 
 static bool isZeroTensor(Value value) {
   Operation *definition = value.getDefiningOp();
-  if (!definition || opName(definition) != "arith.constant")
+  if (!definition || ttirOperationName(definition) != "arith.constant")
     return false;
   auto dense = dyn_cast_or_null<DenseElementsAttr>(definition->getAttr("value"));
   if (!dense || !dense.isSplat())
@@ -81,7 +83,7 @@ static std::optional<unsigned> pointerArgument(
   if (!definition || !seen.insert(definition).second ||
       definition->getNumOperands() == 0)
     return std::nullopt;
-  StringRef name = opName(definition);
+  StringRef name = ttirOperationName(definition);
   if (name != "tt.splat" && name != "tt.addptr" && name != "tt.broadcast" &&
       name != "tt.expand_dims")
     return std::nullopt;
@@ -101,7 +103,7 @@ static bool dependsOn(Value value, Value source, unsigned depth = 0) {
   Operation *definition = value.getDefiningOp();
   if (!definition)
     return false;
-  StringRef name = opName(definition);
+  StringRef name = ttirOperationName(definition);
   if (name != "arith.truncf" && name != "arith.extf" &&
       name != "tt.fp_to_fp" && name != "arith.maxnumf")
     return false;
@@ -117,7 +119,7 @@ static bool hasZeroReluPath(Value value, Value source, unsigned depth = 0) {
   Operation *definition = value.getDefiningOp();
   if (!definition)
     return false;
-  StringRef name = opName(definition);
+  StringRef name = ttirOperationName(definition);
   if (name == "arith.maxnumf" && definition->getNumOperands() == 2) {
     return (isZeroTensor(definition->getOperand(0)) &&
             dependsOn(definition->getOperand(1), source)) ||
@@ -133,18 +135,14 @@ static bool hasZeroReluPath(Value value, Value source, unsigned depth = 0) {
   return false;
 }
 
-static bool hasRoundingAttribute(Operation *op, StringRef expected) {
-  Attribute attr = op->getAttr("rounding");
-  if (!attr)
-    return false;
-  std::string text;
-  llvm::raw_string_ostream stream(text);
-  attr.print(stream);
-  return StringRef(text).contains(expected);
+static bool hasI32EnumAttribute(Operation *op, StringRef name,
+                                int64_t expectedValue) {
+  auto value = dyn_cast_or_null<IntegerAttr>(op->getAttr(name));
+  return value && value.getInt() == expectedValue;
 }
 
 static bool isAcceptedDot(Operation *dot) {
-  if (opName(dot) != "tt.dot" || dot->getNumOperands() != 3 ||
+  if (ttirOperationName(dot) != "tt.dot" || dot->getNumOperands() != 3 ||
       dot->getNumResults() != 1 || !isFp8Tile(dot->getOperand(0)) ||
       !isFp8Tile(dot->getOperand(1)) || !isZeroTensor(dot->getOperand(2)) ||
       !isF32Tile(dot->getResult(0)))
@@ -152,11 +150,10 @@ static bool isAcceptedDot(Operation *dot) {
 
   // AtlasOptions defaults to IEEE for this backend. An explicit non-IEEE
   // request is not admitted by this lowering.
+  // Triton 3.9.0 stores these I32EnumAttrs numerically: IEEE=2.
   if (Attribute precision = dot->getAttr("inputPrecision")) {
-    std::string text;
-    llvm::raw_string_ostream stream(text);
-    precision.print(stream);
-    if (!StringRef(text).contains("ieee"))
+    auto value = dyn_cast<IntegerAttr>(precision);
+    if (!value || value.getInt() != 2)
       return false;
   }
   return true;
@@ -174,7 +171,7 @@ static bool onlyExpectedOps(Operation *function) {
   function->walk([&](Operation *nested) {
     if (nested == function)
       return;
-    StringRef name = opName(nested);
+    StringRef name = ttirOperationName(nested);
     if (llvm::none_of(allowed, [&](StringRef candidate) {
           return candidate == name;
         }))
@@ -189,7 +186,7 @@ struct ConvertTritonToAtlasVirtual
     ModuleOp module = getOperation();
     Operation *ttFunc = nullptr;
     for (Operation &op : module.getBody()->getOperations()) {
-      if (opName(&op) == "tt.func") {
+      if (ttirOperationName(&op) == "tt.func") {
         if (ttFunc) {
           module.emitError("first Atlas lowering expects exactly one tt.func");
           signalPassFailure();
@@ -225,7 +222,7 @@ struct ConvertTritonToAtlasVirtual
     Operation *store = nullptr;
     SmallVector<Operation *, 2> dots;
     for (Operation &nested : sourceBlock.getOperations()) {
-      StringRef name = opName(&nested);
+      StringRef name = ttirOperationName(&nested);
       if (name == "tt.load") {
         if (nested.getNumOperands() != 1 || nested.getNumResults() != 1) {
           nested.emitError("masked or multi-result loads are not supported");
@@ -264,18 +261,23 @@ struct ConvertTritonToAtlasVirtual
 
     Operation *firstDot = dots[0];
     Operation *secondDot = dots[1];
-    if (!isAcceptedDot(firstDot) || !isAcceptedDot(secondDot) ||
-        firstDot->getOperand(0) != loads[0]->getResult(0) ||
+    if (!isAcceptedDot(firstDot) || !isAcceptedDot(secondDot)) {
+      ttFunc->emitError("dot types, zero accumulators, or IEEE precision are unsupported");
+      signalPassFailure();
+      return;
+    }
+    if (firstDot->getOperand(0) != loads[0]->getResult(0) ||
         firstDot->getOperand(1) != loads[1]->getResult(0) ||
         secondDot->getOperand(1) != loads[2]->getResult(0)) {
-      ttFunc->emitError("dot dependencies or FP8/FP32 tile types do not match the two-layer MLP");
+      ttFunc->emitError("dot dependencies do not match the two-layer MLP");
       signalPassFailure();
       return;
     }
     Operation *pack = secondDot->getOperand(0).getDefiningOp();
-    if (!pack || opName(pack) != "tt.fp_to_fp" ||
+    if (!pack || ttirOperationName(pack) != "tt.fp_to_fp" ||
         !isFp8Tile(secondDot->getOperand(0)) ||
-        !hasRoundingAttribute(pack, "rtne") ||
+        // Triton 3.9.0 stores RTNE as I32EnumAttr value 1.
+        !hasI32EnumAttribute(pack, "rounding", 1) ||
         !hasZeroReluPath(pack->getOperand(0), firstDot->getResult(0)) ||
         !dependsOn(store->getOperand(1), secondDot->getResult(0))) {
       ttFunc->emitError("expected BF16 ReLU, RTNE FP8 pack, and BF16 output truncation");

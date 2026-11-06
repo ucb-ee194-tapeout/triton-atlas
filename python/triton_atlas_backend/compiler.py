@@ -1,12 +1,13 @@
-# Compiler half of the Atlas backend for Triton (stub).
+# Compiler half of the Atlas backend for Triton.
 #
 # Triton finds this class through our `triton.backends` entry point (pyproject.toml; triton v3.9.0
 # python/triton/backends/__init__.py:57-62). The hooks are BaseBackend's (python/triton/backends/compiler.py:23-75).
 # make_ttir follows Triton's two backends, NVIDIA and AMD, pass for pass (see the comment there). A line marked
 # "Atlas:" is where we differ from them; every other line is theirs.
 #
-# The "atlas_virtual" stage runs our C++ pipeline. Its pass is empty for now, so the output is still TTIR; the rewriting
-# comes in phase 1 of the plan. Run mode (lowering to program.bin) comes in phase 2.
+# The "atlas_virtual" stage runs the native C++ pipeline. The first implemented
+# rewrite admits one static two-layer FP8 MLP; other TTIR patterns still fail
+# closed. Run mode (lowering to program.bin) is not implemented yet.
 import dataclasses
 import hashlib
 
