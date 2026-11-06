@@ -6,6 +6,7 @@
 // KernelMetadata.cpp; see Patterns.h), so adding a pattern never needs an edit
 // here. Shape follows triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
 #include "Patterns.h"
+#include "Atlas/AtlasTypes.h"
 #include "TritonToAtlasVirtual/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -28,14 +29,20 @@ struct ConvertTritonToAtlasVirtual
     populateReducePatterns(typeConverter, patterns);
     populateBoundaryPatterns(typeConverter, patterns);
 
-    // Partial conversion: an op with no pattern yet stays as it is, so the
-    // pass runs on every kernel while the patterns are being written;
-    // ttatlas-verify-contract{stage=7} reports what is left.
+    // No TTIR or tensor compute operation may leak into the virtual stage.
     ConversionTarget target(*context);
     target.addLegalDialect<atlas::AtlasDialect, func::FuncDialect>();
+    target.addIllegalDialect("tt", "scf", "linalg", "tensor", "arith",
+                             "math");
     target.addIllegalOp<FuncOp, LoadOp, StoreOp>();
+    target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp function) {
+      FunctionType signature = function.getFunctionType();
+      return signature.getNumInputs() == 0 && signature.getNumResults() == 1 &&
+             signature.getResult(0) ==
+                 atlas::VirtualStateType::get(context);
+    });
     ModuleOp module = getOperation();
-    if (failed(applyPartialConversion(module, target, std::move(patterns))) ||
+    if (failed(applyFullConversion(module, target, std::move(patterns))) ||
         failed(attachKernelMetadata(module)))
       signalPassFailure();
   }
