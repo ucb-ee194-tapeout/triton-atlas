@@ -86,6 +86,7 @@ triton-atlas/
 | Run the tests | `make test` |
 | Run some tests | `make test T=<file or folder>`; `LIT_FILTER=<regex>` picks by name |
 | Run passes on one file | `triton-atlas-opt kernel.ttir --convert-triton-to-atlas-virtual --verify-atlas-virtual-stream` |
+| Validate pass 3's tensor tiles and tag matmuls for MXU0 | `triton-atlas-opt kernel.mlir --ttatlas-legalize-shapes` |
 | Compile a kernel | `uv run python my_kernel.py` |
 | Format and lint | `make format` (the git hooks run it on commit) |
 | Build the wheel | `make build.wheel` |
@@ -99,6 +100,12 @@ triton-atlas/
 
 To add a pass: declare it in `Passes.td`, write it in `lib/TritonToAtlasVirtual/`, add it to `Pipeline.cpp`, and add a
 test in `test/<pass>/` (see `test/plugin/verify-atlas-virtual.mlir`).
+
+`--ttatlas-legalize-shapes` is the initial pass 4 slice. It expects pass 3's
+linalg compute tensors to already be 32×32 and marks each `linalg.matmul`
+with `ttatlas.mxu = 0 : i32`. It does not tile larger tensors yet; those are
+rejected so the pass 3 output cannot silently reach Atlas lowering in an
+unsupported shape.
 
 Versions: Triton exactly 3.9.0 and its LLVM commit (both checked at build time); atlas-mlir pinned on its default
 branch.

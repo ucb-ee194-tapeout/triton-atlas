@@ -19,4 +19,14 @@ def ConvertTritonToAtlasVirtual : Pass<"convert-triton-to-atlas-virtual", "mlir:
                            "mlir::arith::ArithDialect"];
 }
 
+def LegalizeAtlasShapes : Pass<"ttatlas-legalize-shapes", "mlir::ModuleOp"> {
+  let summary = "Validate Atlas compute tile shapes and select MXU0";
+  let description = [{
+    First shape-legalization slice: require every tensor value used by linalg
+    compute operations to be 32x32, and tag each linalg.matmul with
+    ttatlas.mxu = 0. Tiling, padding, reductions, and slice reassembly are
+    added in later slices.
+  }];
+}
+
 #endif // TRITON_ATLAS_TRITONTOATLASVIRTUAL_PASSES

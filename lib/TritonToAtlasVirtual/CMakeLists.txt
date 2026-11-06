@@ -1,1 +1,1 @@
-target_sources(TritonAtlasBackend PRIVATE ConvertTritonToAtlasVirtual.cpp Pipeline.cpp)
+target_sources(TritonAtlasBackend PRIVATE ConvertTritonToAtlasVirtual.cpp LegalizeAtlasShapes.cpp Pipeline.cpp)
