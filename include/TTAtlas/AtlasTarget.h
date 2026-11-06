@@ -6,10 +6,10 @@
 // place the hardware reaches into the passes.
 //
 // Sources: atlas-mlir at triton-atlas's pin (third_party/atlas-mlir,
-// 036ee09). Where atlas-mlir's own headers already define a fact (taken there
-// from the RTL), the constant here is that definition, so the two can't drift;
-// static_asserts below flag a change our slot ABI or tags depend on. For
-// hardware facts the taped-out RTL wins over any model or doc.
+// 8ee175c, its default branch). Where atlas-mlir's own headers already define a
+// fact (taken there from the RTL), the constant here is that definition, so the
+// two can't drift; static_asserts below flag a change our slot ABI or tags
+// depend on. For hardware facts the taped-out RTL wins over any model or doc.
 #ifndef TRITON_ATLAS_TTATLAS_ATLASTARGET_H
 #define TRITON_ATLAS_TTATLAS_ATLASTARGET_H
 
@@ -35,7 +35,7 @@ inline constexpr int64_t kSlotBytes = mlir::atlas::kAtlasBF16TileBytes;
 
 // Two matmul units, MXU0 and MXU1, each holding at most 2 weights and 2 live
 // accumulators per block (atlas::MXUOwnership::kUnits and kSlots,
-// include/Atlas/AtlasMXUOwnership.h:18; docs/dialect-reference.md:79,
+// include/Atlas/AtlasMXUOwnership.h:18; docs/dialect-reference.md:80,
 // docs/hardware-status.md:40).
 inline constexpr int kMxuUnits = mlir::atlas::MXUOwnership::kUnits;
 inline constexpr int kMxuWeightsPerUnit = mlir::atlas::MXUOwnership::kSlots;
