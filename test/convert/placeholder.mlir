@@ -1,11 +1,10 @@
-// RUN: triton-atlas-opt %S/../fixtures/mlp.ttir.mlir --convert-triton-to-atlas-virtual | FileCheck %s
+// RUN: triton-atlas-opt %S/../boundary/copy.mlir --convert-triton-to-atlas-virtual --verify-atlas-virtual-stream | FileCheck %s --implicit-check-not='tt.'
 
-// Pass 6 (convert-triton-to-atlas-virtual) is still a placeholder: it runs and leaves the kernel unchanged. This folder is where its
-// tests go (one file per case); replace this file with the first real one.
-
-// CHECK: tt.func public @mlp
-// CHECK: tt.load
-// CHECK: tt.trans
-// CHECK: tt.dot
-// CHECK: arith.maxnumf
-// CHECK: tt.store
+// Boundary conversion is independently usable while compute patterns and the
+// complete kernel manifest producer are unfinished. Hand-tagged BF16 copy
+// needs no compute/type mappings from another lane.
+// CHECK: func.func @copy() -> !atlas.virtual_state
+// CHECK: atlas.virtual_start
+// CHECK: atlas.virtual_input_bf16
+// CHECK: atlas.virtual_output_bf16
+// CHECK: return

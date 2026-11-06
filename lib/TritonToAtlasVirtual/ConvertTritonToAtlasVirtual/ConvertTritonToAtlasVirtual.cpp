@@ -7,6 +7,7 @@
 // triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
 #include "Patterns.h"
 #include "TritonToAtlasVirtual/Passes.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir::triton {
 
@@ -32,6 +33,7 @@ struct ConvertTritonToAtlasVirtual
     // ttatlas-verify-contract{stage=6} reports what is left.
     ConversionTarget target(*context);
     target.addLegalDialect<atlas::AtlasDialect, func::FuncDialect>();
+    target.addIllegalOp<FuncOp, LoadOp, StoreOp>();
     ModuleOp module = getOperation();
     if (failed(applyPartialConversion(module, target, std::move(patterns))) ||
         failed(attachKernelMetadata(module)))
