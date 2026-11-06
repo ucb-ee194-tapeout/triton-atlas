@@ -1,11 +1,14 @@
-// First slice of Atlas shape legalization. This pass validates tile shapes
-// produced by pass 3 and records the MXU choice consumed by later lowering.
+// First slice of pass 4: validate tensors already in Atlas tile shape and tag
+// matmuls for the policy-selected MXU. Tiling and reassembly follow later.
 #include "TritonToAtlasVirtual/Passes.h"
 
+#include "TTAtlas/AtlasTarget.h"
+#include "TTAtlas/TTAtlas.h"
 #include "mlir/IR/BuiltinTypes.h"
+
 namespace mlir::triton {
 
-#define GEN_PASS_DEF_LEGALIZEATLASSHAPES
+#define GEN_PASS_DEF_LEGALIZESHAPES
 #include "TritonToAtlasVirtual/Passes.h.inc"
 
 namespace {
@@ -16,30 +19,32 @@ static bool isLinalgCompute(Operation *op) {
 
 static bool isAtlasTile(Type type) {
   auto tensor = dyn_cast<RankedTensorType>(type);
-  return tensor && tensor.getRank() == 2 && tensor.getDimSize(0) == 32 &&
-         tensor.getDimSize(1) == 32;
+  if (!tensor)
+    return false;
+  if (tensor.getRank() == 1)
+    return tensor.getDimSize(0) == ttatlas::target::kTileSize;
+  return tensor.getRank() == 2 &&
+         tensor.getDimSize(0) == ttatlas::target::kTileSize &&
+         tensor.getDimSize(1) == ttatlas::target::kTileSize;
 }
 
-struct LegalizeAtlasShapes
-    : impl::LegalizeAtlasShapesBase<LegalizeAtlasShapes> {
+struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
   void runOnOperation() override {
-    ModuleOp module = getOperation();
     bool failed = false;
-
-    module.walk([&](Operation *op) {
+    getOperation().walk([&](Operation *op) {
       if (!isLinalgCompute(op))
         return;
 
       for (Value value : op->getOperands()) {
         if (isa<TensorType>(value.getType()) && !isAtlasTile(value.getType())) {
-          op->emitError("expected linalg compute tensor to be 32x32");
+          ttatlas::emitUnsupported(op, "expected linalg tensors to be 32 or 32x32");
           failed = true;
           return;
         }
       }
       for (Value value : op->getResults()) {
         if (isa<TensorType>(value.getType()) && !isAtlasTile(value.getType())) {
-          op->emitError("expected linalg compute tensor to be 32x32");
+          ttatlas::emitUnsupported(op, "expected linalg tensors to be 32 or 32x32");
           failed = true;
           return;
         }
@@ -48,14 +53,15 @@ struct LegalizeAtlasShapes
       if (op->getName().getStringRef() != "linalg.matmul")
         return;
 
-      Attribute oldUnit = op->getAttr("ttatlas.mxu");
+      Attribute oldUnit = op->getAttr(ttatlas::kMxu);
       auto oldInteger = dyn_cast_or_null<IntegerAttr>(oldUnit);
       if (oldUnit && (!oldInteger || oldInteger.getInt() != 0)) {
-        op->emitError("linalg.matmul has conflicting ttatlas.mxu; expected 0");
+        ttatlas::emitUnsupported(op, "linalg.matmul has conflicting ttatlas.mxu; expected 0");
         failed = true;
         return;
       }
-      op->setAttr("ttatlas.mxu",
+      // atlas-hw: MXU0 is the pass 4 default policy; MXU1 cannot run a K chain.
+      op->setAttr(ttatlas::kMxu,
                   IntegerAttr::get(IntegerType::get(op->getContext(), 32), 0));
     });
 
@@ -65,4 +71,5 @@ struct LegalizeAtlasShapes
 };
 
 } // namespace
+
 } // namespace mlir::triton

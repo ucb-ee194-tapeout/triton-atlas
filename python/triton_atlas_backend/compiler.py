@@ -5,9 +5,9 @@
 # make_ttir follows Triton's two backends, NVIDIA and AMD, pass for pass (see the comment there). A line marked
 # "Atlas:" is where we differ from them; every other line is theirs.
 #
-# The "atlas_virtual" stage runs the native C++ pipeline. The first implemented
-# rewrite admits one static two-layer FP8 MLP; other TTIR patterns still fail
-# closed. Run mode (lowering to program.bin) is not implemented yet.
+# The "atlas_virtual" stage runs our C++ pipeline (lib/TritonToAtlasVirtual/Pipeline.cpp). Pass 4 validates already
+# tiled linalg shapes and tags matmuls; pass 7 handles the initial static MLP. Other passes and run mode (lowering
+# to program.bin) remain placeholders.
 import dataclasses
 import hashlib
 
@@ -71,6 +71,7 @@ class AtlasBackend(BaseBackend):
         return ()
 
     def get_codegen_implementation(self, options):
+        # atlas-hw: the 32x32 tile (include/TTAtlas/AtlasTarget.h, kTileSize; atlas-mlir docs/compiler-pipeline.md:109).
         # tl.dot asks the backend for its smallest (M, N, K) (triton v3.9.0 python/triton/language/semantic.py:1596-1601;
         # NVIDIA's version: third_party/nvidia/backend/compiler.py:22-34). Atlas's MXU works on whole 32x32 tiles,
         # so ask for 32 in every dimension; a smaller dot fails in Triton's frontend with Triton's own message.

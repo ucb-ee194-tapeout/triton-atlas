@@ -1,1 +1,2 @@
+add_subdirectory(TTAtlas)
 add_subdirectory(TritonToAtlasVirtual)

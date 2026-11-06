@@ -5,6 +5,7 @@
 #define TRITON_ATLAS_TRITONTOATLASVIRTUAL_PASSES_H
 
 #include "Atlas/AtlasDialect.h"
+#include "TTAtlas/TTAtlas.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
