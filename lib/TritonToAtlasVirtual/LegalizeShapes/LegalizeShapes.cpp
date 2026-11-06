@@ -42,7 +42,7 @@ static bool isSupportedStaticDomain(linalg::LinalgOp op) {
   if (op.hasDynamicShape())
     return false;
   for (int64_t size : op.getStaticLoopRanges())
-    if (size <= 0 || size % ttatlas::target::kTileSize != 0)
+    if (size <= 0)
       return false;
   return true;
 }
@@ -52,8 +52,7 @@ static bool isSupportedTensor(Type type) {
   if (!tensor || (tensor.getRank() != 1 && tensor.getRank() != 2))
     return false;
   return llvm::all_of(tensor.getShape(), [](int64_t size) {
-    return !ShapedType::isDynamic(size) && size > 0 &&
-           size % ttatlas::target::kTileSize == 0;
+    return !ShapedType::isDynamic(size) && size > 0;
   });
 }
 
@@ -216,6 +215,73 @@ static std::optional<ttatlas::PadNeutral> operationNeutral(Operation *op) {
                            : ttatlas::PadNeutral::zero;
   });
   return inferred;
+}
+
+static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
+                                     linalg::LinalgOp op,
+                                     linalg::LinalgOp &paddedOp,
+                                     SmallVectorImpl<Value> &replacements) {
+  SmallVector<int64_t> dimensions;
+  SmallVector<int64_t> multiples;
+  for (auto [index, range] : llvm::enumerate(op.getStaticLoopRanges())) {
+    (void)range;
+    dimensions.push_back(index);
+    multiples.push_back(ttatlas::target::kTileSize);
+  }
+
+  // Pad inputs and output init tensors with the operation's neutral element.
+  // Max reductions use -inf so values introduced by padding cannot win.
+  std::optional<ttatlas::PadNeutral> neutral = operationNeutral(op);
+  if (!neutral) {
+    ttatlas::emitUnsupported(
+        op, "cannot establish a neutral element for static tile padding");
+    return failure();
+  }
+  SmallVector<Attribute> paddingValues;
+  for (Value operand : op->getOperands()) {
+    Type elementType = getElementTypeOrSelf(operand.getType());
+    Attribute value;
+    if (*neutral == ttatlas::PadNeutral::neg_inf) {
+      auto floatType = dyn_cast<FloatType>(elementType);
+      if (!floatType) {
+        ttatlas::emitUnsupported(
+            op, "negative-infinity padding requires floats");
+        return failure();
+      }
+      value = FloatAttr::get(
+          floatType,
+          llvm::APFloat::getInf(floatType.getFloatSemantics(),
+                                /*Negative=*/true));
+    } else {
+      value = rewriter.getZeroAttr(elementType);
+    }
+    paddingValues.push_back(value);
+  }
+
+  linalg::LinalgPaddingOptions options;
+  options.setPaddingDimensions(dimensions);
+  options.setPadToMultipleOf(multiples);
+  options.setPaddingValues(paddingValues);
+  options.setCopyBackOp(linalg::LinalgPaddingOptions::CopyBackOp::None);
+  SmallVector<tensor::PadOp> padOps;
+  if (failed(linalg::rewriteAsPaddedOp(rewriter, op, options, paddedOp,
+                                       replacements, padOps))) {
+    ttatlas::emitUnsupported(
+        op, "MLIR failed to pad linalg iteration dimensions");
+    return failure();
+  }
+  for (tensor::PadOp padOp : padOps) {
+    auto sourceType = dyn_cast<RankedTensorType>(padOp.getSource().getType());
+    if (!sourceType)
+      continue;
+    auto pad = ttatlas::PadAttr::get(rewriter.getContext(), *neutral,
+                                     sourceType.getShape());
+    padOp->setAttr(ttatlas::kPad, pad);
+  }
+  if (!padOps.empty())
+    ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
+                                "pad static linalg dimensions to 32");
+  return success();
 }
 
 static std::optional<ttatlas::PadNeutral> requiredNeutral(Value value,
@@ -459,7 +525,7 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       }
       if (!isSupportedStaticDomain(linalgOp)) {
         ttatlas::emitUnsupported(
-            op, "iteration dimensions must be static multiples of 32");
+            op, "iteration dimensions must be positive and static");
         hadFailure = true;
         continue;
       }
@@ -468,7 +534,7 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
                                                  op->getResultTypes())) {
         if (isa<TensorType>(type) && !isSupportedTensor(type)) {
           ttatlas::emitUnsupported(
-              op, "linalg tensor must have static rank 1 or 2 and dimensions divisible by 32");
+              op, "linalg tensor must have static rank 1 or 2 and positive dimensions");
           hadFailure = true;
           validTensorShapes = false;
           break;
@@ -507,6 +573,23 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       if (op->getName().getStringRef() == "linalg.matmul" && !setMxuZero(op)) {
         signalPassFailure();
         return;
+      }
+      bool needsPadding = llvm::any_of(linalgOp.getStaticLoopRanges(),
+                                       [](int64_t size) {
+        return size % ttatlas::target::kTileSize != 0;
+      });
+      if (needsPadding) {
+        linalg::LinalgOp paddedOp;
+        SmallVector<Value> replacements;
+        rewriter.setInsertionPoint(op);
+        if (failed(padToAtlasTiles(rewriter, linalgOp, paddedOp,
+                                   replacements))) {
+          signalPassFailure();
+          return;
+        }
+        rewriter.replaceOp(op, replacements);
+        op = paddedOp.getOperation();
+        linalgOp = paddedOp;
       }
       SmallVector<int64_t> loopSizes(linalgOp.getNumLoops(),
                                      ttatlas::target::kTileSize);
