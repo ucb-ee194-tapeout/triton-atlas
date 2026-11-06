@@ -2,6 +2,7 @@
 // check of every ttatlas.* tag on every op. Rules: triton-atlas design agenda,
 // "Frozen encodings (v1)". Shape follows triton v3.9.0
 // lib/Dialect/TritonGPU/IR/Dialect.cpp.
+#include "TTAtlas/AtlasTarget.h"
 #include "TTAtlas/TTAtlas.h"
 
 #include "mlir/IR/AffineMap.h"
@@ -106,9 +107,14 @@ static LogicalResult verifyTag(Operation *op, NamedAttribute attr) {
   if (name == kHostDtype)
     return isa<TypeAttr>(value) ? success() : fail("a type");
   if (name == kMxu)
-    return isI32In(value, 0, 1) ? success() : fail("an i32, 0 or 1");
+    return isI32In(value, 0, target::kMxuUnits - 1)
+               ? success()
+               : fail("an i32 in 0.." + Twine(target::kMxuUnits - 1));
   if (name == kScale)
-    return isI32In(value, 122, 128) ? success() : fail("an i32 in 122..128");
+    return isI32In(value, target::kScaleCodeMin, target::kScaleCodeMax)
+               ? success()
+               : fail("an i32 in " + Twine(target::kScaleCodeMin) + ".." +
+                      Twine(target::kScaleCodeMax));
   if (name == kSlot)
     return isa<SlotAttr>(value) ? success() : fail("a #ttatlas.slot");
   if (name == kKChain)

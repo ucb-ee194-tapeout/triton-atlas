@@ -70,6 +70,7 @@ class AtlasBackend(BaseBackend):
         return ()
 
     def get_codegen_implementation(self, options):
+        # atlas-hw: the 32x32 tile (include/TTAtlas/AtlasTarget.h, kTileSize; atlas-mlir docs/compiler-pipeline.md:109).
         # tl.dot asks the backend for its smallest (M, N, K) (triton v3.9.0 python/triton/language/semantic.py:1596-1601;
         # NVIDIA's version: third_party/nvidia/backend/compiler.py:22-34). Atlas's MXU works on whole 32x32 tiles,
         # so ask for 32 in every dimension; a smaller dot fails in Triton's frontend with Triton's own message.

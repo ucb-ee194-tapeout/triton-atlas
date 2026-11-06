@@ -5,6 +5,8 @@
 // triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
 #include "TritonToAtlasVirtual/Passes.h"
 
+#include "TTAtlas/AtlasTarget.h"
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -59,12 +61,14 @@ bool inLinalgBody(Operation *op) {
   return false;
 }
 
+namespace target = mlir::ttatlas::target;
+
 // One Atlas tile: 32x32, or 32 long (a bias row, a row reduction's result).
 bool isTile(Type type) {
   auto tensor = dyn_cast<RankedTensorType>(type);
   return tensor && (tensor.getRank() == 1 || tensor.getRank() == 2) &&
          llvm::all_of(tensor.getShape(),
-                      [](int64_t size) { return size == 32; });
+                      [](int64_t size) { return size == target::kTileSize; });
 }
 // A ranked 1-D or 2-D tensor that is not one tile.
 bool isLarge(Type type) {
@@ -75,7 +79,7 @@ bool isLarge(Type type) {
 // A constant, unit-stride slice of one tile.
 template <typename SliceOp> bool isTileSlice(SliceOp slice) {
   return llvm::all_of(slice.getStaticSizes(),
-                      [](int64_t size) { return size == 32; }) &&
+                      [](int64_t size) { return size == target::kTileSize; }) &&
          llvm::none_of(slice.getStaticOffsets(), ShapedType::isDynamic) &&
          llvm::all_of(slice.getStaticStrides(),
                       [](int64_t stride) { return stride == 1; });
@@ -86,9 +90,9 @@ bool builtFromTiles(Value value) {
   ArrayRef<int64_t> shape = cast<RankedTensorType>(value.getType()).getShape();
   int64_t count = 1;
   for (int64_t size : shape) {
-    if (size % 32)
+    if (size % target::kTileSize)
       return false;
-    count *= size / 32;
+    count *= size / target::kTileSize;
   }
   llvm::SmallDenseSet<std::pair<int64_t, int64_t>, 16> tiles;
   while (auto insert = value.getDefiningOp<tensor::InsertSliceOp>()) {
@@ -96,7 +100,7 @@ bool builtFromTiles(Value value) {
       return false;
     ArrayRef<int64_t> offset = insert.getStaticOffsets();
     for (auto [at, size] : llvm::zip(offset, shape))
-      if (at % 32 || at >= size)
+      if (at % target::kTileSize || at >= size)
         return false;
     if (!tiles.insert({offset[0], offset.size() > 1 ? offset[1] : 0}).second)
       return false;
