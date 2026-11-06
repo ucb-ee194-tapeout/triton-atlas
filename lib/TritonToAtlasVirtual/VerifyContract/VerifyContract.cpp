@@ -5,6 +5,8 @@
 // triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
 #include "TritonToAtlasVirtual/Passes.h"
 
+#include "TTAtlas/AtlasTarget.h"
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
@@ -59,39 +61,53 @@ bool inLinalgBody(Operation *op) {
   return false;
 }
 
-bool is32x32(Type type) {
+namespace target = mlir::ttatlas::target;
+
+// One Atlas tile: 32x32, or 32 long (a bias row, a row reduction's result).
+bool isTile(Type type) {
   auto tensor = dyn_cast<RankedTensorType>(type);
-  return tensor && tensor.getShape() == ArrayRef<int64_t>{32, 32};
+  return tensor && (tensor.getRank() == 1 || tensor.getRank() == 2) &&
+         llvm::all_of(tensor.getShape(),
+                      [](int64_t size) { return size == target::kTileSize; });
 }
-bool isLarge2D(Type type) {
+// A ranked 1-D or 2-D tensor that is not one tile.
+bool isLarge(Type type) {
   auto tensor = dyn_cast<RankedTensorType>(type);
-  return tensor && tensor.getRank() == 2 && !is32x32(tensor);
+  return tensor && (tensor.getRank() == 1 || tensor.getRank() == 2) &&
+         !isTile(tensor);
 }
-// A constant, unit-stride 32x32 slice.
+// A constant, unit-stride slice of one tile.
 template <typename SliceOp> bool isTileSlice(SliceOp slice) {
-  return slice.getStaticSizes() == ArrayRef<int64_t>{32, 32} &&
+  return llvm::all_of(slice.getStaticSizes(),
+                      [](int64_t size) { return size == target::kTileSize; }) &&
          llvm::none_of(slice.getStaticOffsets(), ShapedType::isDynamic) &&
          llvm::all_of(slice.getStaticStrides(),
                       [](int64_t stride) { return stride == 1; });
 }
-// A 2-D tensor built only from constant 32x32 insert_slices over a
-// tensor.empty, one per tile: aligned, distinct, and covering the shape.
+// A tensor built only from constant tile insert_slices over a tensor.empty,
+// one per tile: aligned, distinct, and covering the shape.
 bool builtFromTiles(Value value) {
-  auto shape = cast<RankedTensorType>(value.getType()).getShape();
-  if (shape[0] % 32 || shape[1] % 32)
-    return false;
+  ArrayRef<int64_t> shape = cast<RankedTensorType>(value.getType()).getShape();
+  int64_t count = 1;
+  for (int64_t size : shape) {
+    if (size % target::kTileSize)
+      return false;
+    count *= size / target::kTileSize;
+  }
   llvm::SmallDenseSet<std::pair<int64_t, int64_t>, 16> tiles;
   while (auto insert = value.getDefiningOp<tensor::InsertSliceOp>()) {
     if (!isTileSlice(insert))
       return false;
     ArrayRef<int64_t> offset = insert.getStaticOffsets();
-    if (offset[0] % 32 || offset[1] % 32 || offset[0] >= shape[0] ||
-        offset[1] >= shape[1] || !tiles.insert({offset[0], offset[1]}).second)
+    for (auto [at, size] : llvm::zip(offset, shape))
+      if (at % target::kTileSize || at >= size)
+        return false;
+    if (!tiles.insert({offset[0], offset.size() > 1 ? offset[1] : 0}).second)
       return false;
     value = insert.getDest();
   }
   return value.getDefiningOp<tensor::EmptyOp>() &&
-         int64_t(tiles.size()) == (shape[0] / 32) * (shape[1] / 32);
+         int64_t(tiles.size()) == count;
 }
 
 bool isFloatTensor(Type type) {
@@ -228,9 +244,9 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
     });
   }
 
-  // Pass 4: linalg works on 32x32 tensors; an MXU unit on every matmul; a
-  // larger load is read, and a larger stored tensor written, only through
-  // constant 32x32 slices.
+  // Pass 4: linalg works on single tiles; an MXU unit on every matmul; every
+  // fill writes a fresh tile-sized tensor.empty; a larger load is read, and a
+  // larger stored tensor written, only through constant tile slices.
   void checkStage4(ModuleOp module) {
     module.walk([&](Operation *op) {
       if (inLinalgBody(op))
@@ -238,24 +254,29 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
       if (isLinalg(op)) {
         for (Type type : llvm::concat<const Type>(op->getOperandTypes(),
                                                   op->getResultTypes()))
-          if (isLarge2D(type)) {
-            broken(op, "2-D linalg value is not 32x32");
+          if (isLarge(type)) {
+            broken(op, "linalg value is not one tile (32 or 32x32)");
             break;
           }
         if (isMatmul(op) && !op->hasAttr(tta::kMxu))
           broken(op, "linalg.matmul without ttatlas.mxu");
+        if (isFill(op)) {
+          Value dest = op->getOperands().back();
+          if (!dest.getDefiningOp<tensor::EmptyOp>() || !isTile(dest.getType()))
+            broken(op, "linalg.fill does not write a fresh tensor.empty tile");
+        }
       }
       if (auto load = dyn_cast<LoadOp>(op);
-          load && isLarge2D(load.getType()) &&
+          load && isLarge(load.getType()) &&
           !llvm::all_of(load->getUsers(), [](Operation *user) {
             auto slice = dyn_cast<tensor::ExtractSliceOp>(user);
             return slice && isTileSlice(slice);
           }))
-        broken(op, "tt.load is read other than through constant 32x32 slices");
+        broken(op, "tt.load is read other than through constant tile slices");
       if (auto store = dyn_cast<StoreOp>(op);
-          store && isLarge2D(store.getValue().getType()) &&
+          store && isLarge(store.getValue().getType()) &&
           !builtFromTiles(store.getValue()))
-        broken(op, "stored tensor is not built from constant 32x32 "
+        broken(op, "stored tensor is not built from constant tile "
                    "insert_slices");
     });
   }
@@ -269,9 +290,9 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
       if (!isMatmul(op))
         return;
       accumulator.insert(op);
-      for (Value input : op->getOperands().take_front(2))
-        if (!isFp8(input.getType()))
-          broken(op, "linalg.matmul inputs are not FP8 E4M3");
+      if (!llvm::all_of(op->getOperands().take_front(2),
+                        [](Value input) { return isFp8(input.getType()); }))
+        broken(op, "linalg.matmul inputs are not FP8 E4M3");
       Operation *seed = op->getOperands().back().getDefiningOp();
       if (seed && isFill(seed)) {
         accumulator.insert(seed);

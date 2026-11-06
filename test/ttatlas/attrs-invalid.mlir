@@ -7,7 +7,7 @@
 
 // -----
 
-// expected-error @below {{ttatlas.mxu must be an i32, 0 or 1}}
+// expected-error @below {{ttatlas.mxu must be an i32 in 0..1}}
 %a = tt.get_program_id x {ttatlas.mxu = 2 : i32} : i32
 
 // -----
@@ -50,7 +50,7 @@ func.func @k() attributes {ttatlas.kernel = "{\22version\22: 2}"} {
 
 // -----
 
-// expected-error @below {{ttatlas.mxu must be an i32, 0 or 1}}
+// expected-error @below {{ttatlas.mxu must be an i32 in 0..1}}
 %a = tt.get_program_id x {ttatlas.mxu = 0 : i64} : i32
 
 // -----
@@ -111,7 +111,7 @@ func.func @arg(%x: i32 {ttatlas.bad = 1 : i32}) {
 
 // -----
 
-// expected-error @below {{ttatlas.mxu must be an i32, 0 or 1}}
+// expected-error @below {{ttatlas.mxu must be an i32 in 0..1}}
 func.func @res() -> (i32 {ttatlas.mxu = 7 : i32}) {
   %c = arith.constant 0 : i32
   return %c : i32
@@ -131,5 +131,5 @@ module attributes {ttatlas.legalized = [{pass = "ttatlas-legalize-shapes", what 
 // -----
 
 // Only signless integers: a signed i32 is rejected, not read.
-// expected-error @below {{ttatlas.mxu must be an i32, 0 or 1}}
+// expected-error @below {{ttatlas.mxu must be an i32 in 0..1}}
 %a = tt.get_program_id x {ttatlas.mxu = 1 : si32} : i32

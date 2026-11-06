@@ -34,12 +34,14 @@ def TTAtlas_SlotAttr : TTAtlas_Attr<"Slot", "slot"> {
                        "$tile_origin `,` `logical_shape` `=` `[` $logical_shape `]` `,` `host_dtype` `=` $host_dtype `>`";
 }
 
-// On each tt.dot of a K contraction, set by passes 2 and 4, read by passes 5 and 7.
+// On each tt.dot of an unrolled K loop, set by pass 2, read by pass 3. From pass 3 on, a K chain is the def-use
+// chain linalg.fill -> linalg.matmul -> linalg.matmul ... itself, so passes 4-7 read the structure, not this tag.
 def TTAtlas_KChainAttr : TTAtlas_Attr<"KChain", "k_chain"> {
   let summary = "position of a dot in one K contraction";
   let description = [{
-    id: one per contraction in the kernel. pos: 0-based step. len: steps in the chain. Pass 7 emits mxu_reset at
-    pos = 0 and mxu_readout_bf16 at pos = len - 1.
+    id: one per contraction in the kernel. pos: 0-based step. len: steps in the chain. Pass 3 links the tagged
+    dots into one linalg.fill -> linalg.matmul chain; pass 7 emits mxu_reset at its start and mxu_readout_bf16 at
+    its end.
   }];
   let parameters = (ins "int32_t":$id, "int32_t":$pos, "int32_t":$len);
   let assemblyFormat = "`<` struct(params) `>`";

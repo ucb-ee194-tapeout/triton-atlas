@@ -25,14 +25,13 @@ namespace mlir::ttatlas {
 inline constexpr llvm::StringLiteral kHostDtype =
     "ttatlas.host_dtype"; // TypeAttr, on loads and stores (pass 1)
 inline constexpr llvm::StringLiteral kKChain =
-    "ttatlas.k_chain"; // #ttatlas.k_chain, on tt.dot, later linalg.matmul
-                       // (passes 2, 4)
+    "ttatlas.k_chain"; // #ttatlas.k_chain, on tt.dot (pass 2, read by pass 3)
 inline constexpr llvm::StringLiteral kPad =
     "ttatlas.pad"; // #ttatlas.pad, on the defining op, not a constant (pass 4)
 inline constexpr llvm::StringLiteral kMxu =
-    "ttatlas.mxu"; // i32 0 or 1, on linalg.matmul (pass 4)
+    "ttatlas.mxu"; // i32 < target::kMxuUnits, on linalg.matmul (pass 4)
 inline constexpr llvm::StringLiteral kScale =
-    "ttatlas.scale"; // i32 122..128, on an FP8 pack (pass 5)
+    "ttatlas.scale"; // i32 target::kScaleCode{Min,Max}, on an FP8 pack (pass 5)
 inline constexpr llvm::StringLiteral kSlot =
     "ttatlas.slot"; // #ttatlas.slot, on loads and stores (pass 6)
 inline constexpr llvm::StringLiteral kPrecisionPolicy =

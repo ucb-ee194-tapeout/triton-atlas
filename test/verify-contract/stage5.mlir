@@ -57,3 +57,16 @@ tt.func @f32_pointer_tensor(%x: tensor<32xi64>) {
   %s = tt.int_to_ptr %x : tensor<32xi64> -> tensor<32x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// The f32 zero is exempt only while the chain's fill is its only user.
+tt.func @shared_zero(%a: tensor<32x32xf8E4M3FN>) {
+  // expected-error @below {{contract of pass 5 broken: float value or pointer is neither BF16 nor FP8}}
+  %zero = arith.constant 0.000000e+00 : f32
+  %empty = tensor.empty() : tensor<32x32xf32>
+  %acc = linalg.fill ins(%zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %m = linalg.matmul ins(%a, %a : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %h = arith.truncf %zero : f32 to bf16
+  tt.return
+}

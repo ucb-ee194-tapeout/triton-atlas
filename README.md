@@ -101,5 +101,10 @@ To add a pass: declare it in its own file under `include/TritonToAtlasVirtual/Pa
 write it in its own folder under `lib/TritonToAtlasVirtual/`, add it to `Pipeline.cpp`, and add a test folder
 `test/<pass>/` (see `test/plugin/verify-atlas-virtual.mlir`).
 
+Atlas hardware facts (tile size, slot size, MXU limits, scale codes, DRAM window) live in
+`include/TTAtlas/AtlasTarget.h`, each with its source; passes use those constants instead of spelling numbers. Logic
+that depends on the hardware in a way a constant can't hold gets an `atlas-hw:` comment with its source.
+`git grep -n "atlas-hw:\|target::"` lists every place the hardware reaches into the passes.
+
 Versions: Triton exactly 3.9.0 and its LLVM commit (both checked at build time); atlas-mlir pinned on its default
 branch.

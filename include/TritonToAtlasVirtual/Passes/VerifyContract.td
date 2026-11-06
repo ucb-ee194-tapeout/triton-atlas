@@ -10,9 +10,10 @@ def VerifyContract : Pass<"ttatlas-verify-contract", "mlir::ModuleOp"> {
              the previous step's result (same id and len, pos - 1); no scf.for with a constant trip count.
     stage=3: no tt.dot, tt.trans or tt.reduce; no arith / math op on a float tensor; no other tt op except tt.load
              producing a float tensor (constants, loads, stores and integer or pointer address math stay TTIR).
-    stage=4: every 2-D linalg value is 32x32; every linalg.matmul carries ttatlas.mxu; a larger tt.load is read
-             only through constant 32x32 extract_slices, a larger stored tensor built only from constant 32x32
-             insert_slices over a tensor.empty, one per tile, covering it.
+    stage=4: every 1-D or 2-D linalg value is one tile (32 or 32x32); every linalg.matmul carries ttatlas.mxu; every
+             linalg.fill writes a fresh tile-sized tensor.empty; a larger tt.load is read only through constant tile
+             extract_slices, a larger stored tensor built only from constant tile insert_slices over a
+             tensor.empty, one per tile, aligned, distinct and covering it.
     stage=5: linalg.matmul inputs are FP8 E4M3; every other float value or pointer is BF16 or FP8 (a matmul chain's
              accumulator may be f32: the matmuls, their linalg.fill seed, and the zero and tensor.empty only it uses).
     stage=6: every tt.load / tt.store carries #ttatlas.slot.
