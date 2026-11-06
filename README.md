@@ -97,8 +97,9 @@ triton-atlas/
 | Clean up | `make clean`; `make clean.<part>` for one part |
 | List every command | `make help` |
 
-To add a pass: declare it in `Passes.td`, write it in `lib/TritonToAtlasVirtual/`, add it to `Pipeline.cpp`, and add a
-test in `test/<pass>/` (see `test/plugin/verify-atlas-virtual.mlir`).
+To add a pass: declare it in its own file under `include/TritonToAtlasVirtual/Passes/` (included from `Passes.td`),
+write it in its own folder under `lib/TritonToAtlasVirtual/`, add it to `Pipeline.cpp`, and add a test folder
+`test/<pass>/` (see `test/plugin/verify-atlas-virtual.mlir`).
 
 Versions: Triton exactly 3.9.0 and its LLVM commit (both checked at build time); atlas-mlir pinned on its default
 branch.
