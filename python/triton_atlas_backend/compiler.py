@@ -9,11 +9,36 @@
 # placeholders for now, so the output is still TTIR; the rewriting comes in phase 1 of the plan. Run mode (lowering to program.bin) comes in phase 2.
 import dataclasses
 import hashlib
+import json
 
 from triton._C.libtriton import ir, passes
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 
 from . import PACKAGE_DIR, PLUGIN_LIBRARY
+
+
+def _export_kernel_metadata(mod, metadata):
+    """Copy the finalized MLIR manifest verbatim; the driver owns its use."""
+    functions = []
+
+    def collect(op):
+        if op.get_name() == "func.func":
+            functions.append((op.get_str_attr("sym_name"), op.get_str_attr("ttatlas.kernel")))
+
+    mod.walk(collect)
+    if len(functions) != 1:
+        raise ValueError("Atlas metadata export requires exactly one converted func.func")
+    name, manifest = functions[0]
+    if manifest is None:
+        raise ValueError("Converted Atlas function is missing finalized ttatlas.kernel metadata")
+    parsed = json.loads(manifest)
+    if not isinstance(parsed, dict) or parsed.get("version") != 1 or parsed.get("name") != name:
+        raise ValueError("ttatlas.kernel must be a version-1 manifest matching the Atlas function name")
+    # Triton constructs a namedtuple from metadata keys, so a dotted key is
+    # invalid. Keep the original JSON string under an identifier-safe key.
+    metadata["ttatlas_kernel"] = manifest
+    metadata["name"] = name
+    metadata["shared"] = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -135,8 +160,7 @@ class AtlasBackend(BaseBackend):
 
     @staticmethod
     def make_atlas_virtual(mod, metadata, options):
-        text = str(mod)
-        metadata["name"] = next(line for line in text.splitlines() if "tt.func" in line).split("@")[1].split("(")[0]
+        metadata["name"] = mod.get_entry_func_name()
         metadata["shared"] = 0
         # fold_bias_into_dot reaches pass 2 as a module tag (include/TTAtlas/TTAtlas.h), so every IR dump records it.
         builder = ir.builder(mod.context)
@@ -145,6 +169,7 @@ class AtlasBackend(BaseBackend):
         pm.enable_debug()
         passes.plugin.add_atlas_virtual_pipeline(pm)
         pm.run(mod, "make_atlas_virtual")
+        _export_kernel_metadata(mod, metadata)
         return str(mod)
 
     def add_stages(self, stages, options, language):
