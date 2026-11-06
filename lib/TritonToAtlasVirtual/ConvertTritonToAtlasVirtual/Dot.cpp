@@ -33,7 +33,8 @@ static std::optional<Role> getWeightRole(Value value) {
       return slot.getRole();
     StringRef name = definition->getName().getStringRef();
     if ((name == "linalg.transpose" || name == "tensor.extract_slice" ||
-         name == "tensor.cast") && definition->getNumOperands() > 0) {
+         name == "tensor.cast" || name == "tensor.pad") &&
+        definition->getNumOperands() > 0) {
       value = definition->getOperand(0);
       continue;
     }

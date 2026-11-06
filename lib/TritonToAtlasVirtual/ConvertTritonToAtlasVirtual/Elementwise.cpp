@@ -8,6 +8,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
@@ -86,6 +87,38 @@ struct EraseTileCast : ConversionPattern {
         !isa<atlas::VirtualBF16Type>(operands.front().getType()) ||
         !isa<atlas::VirtualBF16Type>(getTypeConverter()->convertType(
             op->getResult(0).getType())))
+      return failure();
+    rewriter.replaceOp(op, operands.front());
+    return success();
+  }
+};
+
+struct EraseDeadTensorOp : ConversionPattern {
+  EraseDeadTensorOp(const TypeConverter &converter, MLIRContext *context,
+                    StringRef rootName)
+      : ConversionPattern(converter, rootName, PatternBenefit(1), context) {}
+
+  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value>,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (llvm::any_of(op->getResults(),
+                     [](Value result) { return !result.use_empty(); }))
+      return failure();
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+struct EraseTileBroadcast : ConversionPattern {
+  EraseTileBroadcast(const TypeConverter &converter, MLIRContext *context,
+                     StringRef rootName)
+      : ConversionPattern(converter, rootName, PatternBenefit(2), context) {}
+
+  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                                ConversionPatternRewriter &rewriter) const override {
+    if (op->getNumResults() != 1 || operands.empty() ||
+        !isa<atlas::VirtualBF16Type>(operands.front().getType()) ||
+        !isa<atlas::VirtualBF16Type>(
+            getTypeConverter()->convertType(op->getResult(0).getType())))
       return failure();
     rewriter.replaceOp(op, operands.front());
     return success();
@@ -188,6 +221,14 @@ void populateElementwisePatterns(TypeConverter &typeConverter,
                               "arith.truncf");
   patterns.add<EraseTileCast>(typeConverter, patterns.getContext(),
                               "arith.extf");
+  patterns.add<EraseTileBroadcast>(typeConverter, patterns.getContext(),
+                                   "linalg.broadcast");
+  patterns.add<EraseTileBroadcast>(typeConverter, patterns.getContext(),
+                                   "tensor.expand_shape");
+  for (StringRef tensorOp : {"tensor.pad", "tensor.extract_slice",
+                             "tensor.insert_slice", "tensor.empty"})
+    patterns.add<EraseDeadTensorOp>(typeConverter, patterns.getContext(),
+                                    tensorOp);
 }
 
 } // namespace mlir::triton

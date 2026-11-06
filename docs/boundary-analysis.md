@@ -57,10 +57,11 @@ on virtual I/O for metadata generation.
 Whole-tensor loads/stores, boundary slices, output assembly empties and proven
 address scaffolding are removed. Escaping pointer/address values, unrelated
 slices and nested boundary memory fail before rewriting. Linalg compute regions
-are cloned for Devansh's patterns. The shared conversion driver and compute
-patterns were not changed in this integration. The driver still uses partial
-conversion while compute implementations are pending; Stage 7 and the stream
-verifier must be run to check completed output.
+are cloned for the dot and elementwise patterns. The conversion driver now
+requires full conversion and an argument-free `func.func` returning
+`!atlas.virtual_state`. Current boundary code accepts only complete 32x32 tiles;
+partial tiles and 1-D bias broadcasts need Pass 6 packing support. The pass 7
+fixtures and stream verifier have not been run on BWRC.
 
 ## Kernel metadata v1
 

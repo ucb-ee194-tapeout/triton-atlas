@@ -198,7 +198,8 @@ static std::optional<ttatlas::PadNeutral> constantNeutral(Value value) {
 
 static std::optional<ttatlas::PadNeutral> operationNeutral(Operation *op) {
   StringRef name = op->getName().getStringRef();
-  if (name == "linalg.matmul")
+  if (name == "linalg.matmul" || name == "linalg.transpose" ||
+      name == "linalg.broadcast")
     return ttatlas::PadNeutral::zero;
   if (name == "linalg.fill" && op->getNumOperands() > 0)
     return constantNeutral(op->getOperand(0));
@@ -207,7 +208,9 @@ static std::optional<ttatlas::PadNeutral> operationNeutral(Operation *op) {
   std::optional<ttatlas::PadNeutral> inferred;
   op->walk([&](Operation *nested) {
     StringRef nestedName = nested->getName().getStringRef();
-    if (nestedName == "arith.addf" || nestedName == "arith.addi")
+    if (nestedName == "arith.addf" || nestedName == "arith.addi" ||
+        nestedName == "arith.subf" || nestedName == "arith.mulf" ||
+        nestedName == "arith.minnumf" || nestedName == "arith.maxnumf")
       inferred = ttatlas::PadNeutral::zero;
     if (nestedName == "arith.maximumf" || nestedName == "arith.maxnumf" ||
         nestedName == "arith.maxsi" || nestedName == "arith.maxui")
