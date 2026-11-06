@@ -12,5 +12,6 @@ include "Passes/LegalizeShapes.td"              // pass 3
 include "Passes/LegalizeDtypes.td"              // pass 4
 include "Passes/AssignSlots.td"                 // pass 5
 include "Passes/ConvertTritonToAtlasVirtual.td" // pass 6
+include "Passes/VerifyContract.td"              // checker used by tests, not in the pipeline
 
 #endif // TRITON_ATLAS_TRITONTOATLASVIRTUAL_PASSES
