@@ -25,15 +25,16 @@ namespace mlir::ttatlas {
 inline constexpr llvm::StringLiteral kHostDtype =
     "ttatlas.host_dtype"; // TypeAttr, on loads and stores (pass 1)
 inline constexpr llvm::StringLiteral kKChain =
-    "ttatlas.k_chain"; // #ttatlas.k_chain, on tt.dot (passes 2, 3)
+    "ttatlas.k_chain"; // #ttatlas.k_chain, on tt.dot, later linalg.matmul
+                       // (passes 2, 4)
 inline constexpr llvm::StringLiteral kPad =
-    "ttatlas.pad"; // #ttatlas.pad, on the defining op, not a constant (pass 3)
+    "ttatlas.pad"; // #ttatlas.pad, on the defining op, not a constant (pass 4)
 inline constexpr llvm::StringLiteral kMxu =
-    "ttatlas.mxu"; // i32 0 or 1, on tt.dot (pass 3)
+    "ttatlas.mxu"; // i32 0 or 1, on linalg.matmul (pass 4)
 inline constexpr llvm::StringLiteral kScale =
-    "ttatlas.scale"; // i32 122..128, on an FP8 pack (pass 4)
+    "ttatlas.scale"; // i32 122..128, on an FP8 pack (pass 5)
 inline constexpr llvm::StringLiteral kSlot =
-    "ttatlas.slot"; // #ttatlas.slot, on loads and stores (pass 5)
+    "ttatlas.slot"; // #ttatlas.slot, on loads and stores (pass 6)
 inline constexpr llvm::StringLiteral kPrecisionPolicy =
     "ttatlas.precision_policy"; // string, on the module
 inline constexpr llvm::StringLiteral kLayout =
@@ -41,10 +42,10 @@ inline constexpr llvm::StringLiteral kLayout =
 inline constexpr llvm::StringLiteral kDramBase =
     "ttatlas.dram_base"; // i64 input base address, on the module
 inline constexpr llvm::StringLiteral kKernel =
-    "ttatlas.kernel"; // JSON string (schema v1), on the function (pass 6)
+    "ttatlas.kernel"; // JSON string (schema v1), on the function (pass 7)
 // List of {pass, what, loc} entries, one per legalization a pass did (on the
 // module). Absent or empty means the kernel was native: it reached Atlas
-// without any rewrite. Pass 6 copies it into ttatlas.kernel's
+// without any rewrite. Pass 7 copies it into ttatlas.kernel's
 // "legalized" field.
 inline constexpr llvm::StringLiteral kLegalized = "ttatlas.legalized";
 

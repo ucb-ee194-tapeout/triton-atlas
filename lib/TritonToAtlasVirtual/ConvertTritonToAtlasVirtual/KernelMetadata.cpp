@@ -1,3 +1,4 @@
+// Pass 7 kernel ABI and metadata.
 // The documented v1 field set is known, but tile_origin and host_dtype JSON
 // encodings await the team's schema/golden example. Do not publish a partial or
 // independently invented ttatlas.kernel. Derive/check the unambiguous ABI now.

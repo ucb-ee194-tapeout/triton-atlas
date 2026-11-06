@@ -1,3 +1,4 @@
+// Pass 6: assign slots after Linalg shape and dtype legalization.
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "mlir/IR/AffineMap.h"

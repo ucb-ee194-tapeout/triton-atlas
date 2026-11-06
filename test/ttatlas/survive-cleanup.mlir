@@ -1,6 +1,6 @@
 // RUN: triton-atlas-opt %s --canonicalize --cse | FileCheck %s
 
-// The pipeline runs canonicalize and CSE after passes 2, 3 and 4, and later passes read the tags earlier passes
+// The pipeline runs canonicalize and CSE after passes 2, 4 and 5, and later passes read the tags earlier passes
 // set. This checks the tags on loads, stores and dots survive both, and that CSE keeps two loads with different
 // slots apart while merging two identical ones.
 

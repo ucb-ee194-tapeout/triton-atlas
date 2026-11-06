@@ -1,6 +1,6 @@
 // RUN: triton-atlas-opt %S/../boundary/copy.mlir --convert-triton-to-atlas-virtual --verify-atlas-virtual-stream | FileCheck %s --implicit-check-not='tt.'
 
-// Boundary conversion is independently usable while compute patterns and the
+// Pass 7 boundary conversion is independently usable while compute patterns and the
 // complete kernel manifest producer are unfinished. Hand-tagged BF16 copy
 // needs no compute/type mappings from another lane.
 // CHECK: func.func @copy() -> !atlas.virtual_state

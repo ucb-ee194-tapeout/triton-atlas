@@ -1,5 +1,5 @@
-// Pass 3, ttatlas-legalize-shapes. Contract: triton-atlas design agenda, page
-// "Pass 3 · ttatlas-legalize-shapes". Placeholder for now: runOnOperation()
+// Pass 4, ttatlas-legalize-shapes. Contract: triton-atlas design agenda, page
+// "Pass 4 · ttatlas-legalize-shapes". Placeholder for now: runOnOperation()
 // does nothing. Shape follows triton v3.9.0
 // third_party/amd/lib/TritonAMDGPUToLLVM.
 #include "TritonToAtlasVirtual/Passes.h"
