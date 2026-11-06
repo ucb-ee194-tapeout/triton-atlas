@@ -14,7 +14,9 @@ void populateTypeConversions(TypeConverter &typeConverter) {
       return type;
 
     Type element = tensor.getElementType();
-    if (element.isBF16())
+    // Pass 5 keeps an MXU's float32 accumulator in linalg IR, but its
+    // architectural readout and all VPU consumers are BF16 tiles.
+    if (element.isBF16() || element.isF32())
       return atlas::VirtualBF16Type::get(type.getContext());
     if (isa<Float8E4M3FNType>(element))
       return atlas::VirtualFP8Type::get(type.getContext());
