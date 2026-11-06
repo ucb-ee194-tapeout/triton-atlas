@@ -5,8 +5,8 @@
 # make_ttir follows Triton's two backends, NVIDIA and AMD, pass for pass (see the comment there). A line marked
 # "Atlas:" is where we differ from them; every other line is theirs.
 #
-# The "atlas_virtual" stage runs our C++ pipeline. Its pass is empty for now, so the output is still TTIR; the rewriting
-# comes in phase 1 of the plan. Run mode (lowering to program.bin) comes in phase 2.
+# The "atlas_virtual" stage runs our C++ pipeline (lib/TritonToAtlasVirtual/Pipeline.cpp). Its passes are empty
+# placeholders for now, so the output is still TTIR; the rewriting comes in phase 1 of the plan. Run mode (lowering to program.bin) comes in phase 2.
 import dataclasses
 import hashlib
 
