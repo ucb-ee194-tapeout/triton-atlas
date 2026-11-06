@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://triton-atlas.org/schemas/ttatlas.kernel.v1.schema.json",
+  "title": "ttatlas.kernel v1 (M1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "name",
+    "dram_base",
+    "inputs",
+    "outputs",
+    "grid",
+    "legalized"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dram_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "output"
+      ],
+      "properties": {
+        "input": {
+          "type": "integer",
+          "minimum": 2147483648,
+          "maximum": 4294967295,
+          "multipleOf": 1024
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 2147483648,
+          "maximum": 4294967295,
+          "multipleOf": 1024
+        }
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/slot"
+          },
+          {
+            "properties": {
+              "role": {
+                "enum": [
+                  "activation_fp8",
+                  "weight_fp8_nk",
+                  "weight_fp8_kn",
+                  "bias_bf16",
+                  "mask_bf16",
+                  "constant_bf16"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/slot"
+          },
+          {
+            "properties": {
+              "role": {
+                "const": "output_bf16"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "grid": {
+      "const": [
+        1,
+        1,
+        1
+      ]
+    },
+    "legalized": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pass",
+          "what",
+          "loc"
+        ],
+        "properties": {
+          "pass": {
+            "type": "string"
+          },
+          "what": {
+            "type": "string"
+          },
+          "loc": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "arg",
+        "role",
+        "tile_origin",
+        "logical_shape",
+        "host_dtype",
+        "layout"
+      ],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "arg": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "role": {
+          "enum": [
+            "activation_fp8",
+            "weight_fp8_nk",
+            "weight_fp8_kn",
+            "bias_bf16",
+            "mask_bf16",
+            "constant_bf16",
+            "output_bf16"
+          ]
+        },
+        "tile_origin": {
+          "type": "string",
+          "pattern": "^affine_map<\\(\\)\\[s0, s1, s2, s3, s4, s5\\] -> \\([0-9]+, [0-9]+\\)>$"
+        },
+        "logical_shape": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "const": 32
+            },
+            {
+              "const": 32
+            }
+          ],
+          "items": false,
+          "minItems": 2
+        },
+        "host_dtype": {
+          "type": "string",
+          "pattern": "^(bf16|tf32|f[0-9]+[A-Za-z0-9]*|[su]?i[0-9]+)$"
+        },
+        "layout": {
+          "enum": [
+            "row_major",
+            "tile_major"
+          ]
+        }
+      }
+    }
+  }
+}
