@@ -1,60 +1,19 @@
 // RUN: triton-atlas-opt %s --split-input-file --verify-diagnostics --ttatlas-verify-contract=stage=6
 
-// Pass 6's contract: no TTIR is left; one argument-free func.func carrying ttatlas.kernel.
+// Pass 6's contract: every tt.load / tt.store carries #ttatlas.slot.
 
-func.func @ok() -> !atlas.virtual_state attributes {ttatlas.kernel = "{\22version\22: 1}"} {
-  %io0 = "atlas.virtual_start"() : () -> !atlas.virtual_state
-  return %io0 : !atlas.virtual_state
+tt.func @ok(%p: !tt.ptr<bf16>) {
+  %s = tt.splat %p : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>
+  %v = tt.load %s {ttatlas.slot = #ttatlas.slot<index = 0, arg = 0, role = bias_bf16, tile_origin = affine_map<()[s0, s1, s2, s3, s4, s5] -> (0, 0)>, logical_shape = [32, 32], host_dtype = bf16>} : tensor<32x32x!tt.ptr<bf16>>
+  tt.store %s, %v {ttatlas.slot = #ttatlas.slot<index = 0, arg = 0, role = output_bf16, tile_origin = affine_map<()[s0, s1, s2, s3, s4, s5] -> (0, 0)>, logical_shape = [32, 32], host_dtype = bf16>} : tensor<32x32x!tt.ptr<bf16>>
+  tt.return
 }
 
 // -----
 
-// expected-error @below {{contract of pass 6 broken: func.func has arguments}}
-func.func @args(%x: i32) attributes {ttatlas.kernel = "{\22version\22: 1}"} {
-  return
-}
-
-// -----
-
-// expected-error @below {{contract of pass 6 broken: func.func without ttatlas.kernel}}
-func.func @no_meta() {
-  return
-}
-
-// -----
-
-// expected-error @below {{contract of pass 6 broken: expected one func.func, found 0}}
-module {
-  // expected-error @below {{contract of pass 6 broken: TTIR is left: tt.func}}
-  tt.func @k() {
-    // expected-error @below {{contract of pass 6 broken: TTIR is left: tt.return}}
-    tt.return
-  }
-}
-
-// -----
-
-// expected-error @below {{contract of pass 6 broken: expected one func.func, found 2}}
-module {
-  func.func @a() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
-    return
-  }
-  func.func @b() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
-    return
-  }
-}
-
-// -----
-
-// A func.func inside another op is not the kernel, even when the count of top-level ones is right.
-module {
-  func.func @k() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
-    return
-  }
-  builtin.module {
-    // expected-error @below {{contract of pass 6 broken: func.func nested inside another op}}
-    func.func @inner() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
-      return
-    }
-  }
+tt.func @no_slot(%p: !tt.ptr<bf16>) {
+  %s = tt.splat %p : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>
+  // expected-error @below {{contract of pass 6 broken: missing #ttatlas.slot}}
+  %v = tt.load %s : tensor<32x32x!tt.ptr<bf16>>
+  tt.return
 }
