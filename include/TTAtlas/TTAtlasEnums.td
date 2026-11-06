@@ -5,7 +5,7 @@
 include "mlir/IR/EnumAttr.td"
 include "TTAtlasDialect.td"
 
-// What a slot's tile is for (pass 5 sets it; pass 6 and the driver read it).
+// What a slot's tile is for (pass 6 sets it; pass 7 and the driver read it).
 def TTAtlas_SlotRole : I32EnumAttr<"SlotRole", "role of a DRAM slot's tile", [
     I32EnumAttrCase<"activation_fp8", 0>, I32EnumAttrCase<"weight_fp8_nk", 1>,
     I32EnumAttrCase<"weight_fp8_kn", 2>, I32EnumAttrCase<"bias_bf16", 3>,
@@ -15,7 +15,7 @@ def TTAtlas_SlotRole : I32EnumAttr<"SlotRole", "role of a DRAM slot's tile", [
   let genSpecializedAttr = 0;
 }
 
-// Neutral element written into padded lanes (pass 3).
+// Neutral element written into padded lanes (pass 4).
 def TTAtlas_PadNeutral : I32EnumAttr<"PadNeutral", "neutral element of padded lanes", [
     I32EnumAttrCase<"zero", 0>, I32EnumAttrCase<"neg_inf", 1>]> {
   let cppNamespace = "::mlir::ttatlas";

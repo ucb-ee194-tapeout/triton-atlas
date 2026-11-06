@@ -1,4 +1,4 @@
-// The pieces of pass 6 (convert-triton-to-atlas-virtual), one file each, so
+// The pieces of pass 7 (convert-triton-to-atlas-virtual), one file each, so
 // several people can work in the pass without editing the same file. Private to
 // this folder; ConvertTritonToAtlasVirtual.cpp runs them all.
 #ifndef TRITON_ATLAS_CONVERTTRITONTOATLASVIRTUAL_PATTERNS_H

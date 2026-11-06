@@ -1,5 +1,5 @@
-// Pass 5, ttatlas-assign-slots. Contract: triton-atlas design agenda, page
-// "Pass 5 · ttatlas-assign-slots". Placeholder for now: runOnOperation() does
+// Pass 6, ttatlas-assign-slots. Contract: triton-atlas design agenda, page
+// "Pass 6 · ttatlas-assign-slots". Placeholder for now: runOnOperation() does
 // nothing. Shape follows triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
 #include "TritonToAtlasVirtual/Passes.h"
 

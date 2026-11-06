@@ -159,7 +159,7 @@ LogicalResult TTAtlasDialect::verifyOperationAttribute(Operation *op,
            << attr.getName().getValue()
            << " is on a constant; canonicalize drops attributes of constants, "
               "so tag the op that uses it";
-  // Pass 1's host dtype and pass 5's slot record the same fact; once both exist
+  // Pass 1's host dtype and pass 6's slot record the same fact; once both exist
   // they must agree. Checked from the slot's side, which sees the sibling tag
   // whatever the attribute order.
   if (auto slot = dyn_cast<SlotAttr>(attr.getValue())) {
