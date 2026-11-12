@@ -52,8 +52,8 @@ func.func @split_k_matmul(%a: tensor<32x64xf8E4M3FN>, %b: tensor<64x32xf8E4M3FN>
 }
 
 // CHECK-LABEL: func.func @split_k_matmul
-// CHECK-COUNT-2: linalg.matmul {{.*}}ttatlas.mxu = 0 : i32
 // CHECK: linalg.fill
+// CHECK-COUNT-2: linalg.matmul {{.*}}ttatlas.mxu = 0 : i32
 
 // -----
 
