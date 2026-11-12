@@ -24,20 +24,28 @@ namespace mlir::triton {
 
 namespace {
 
-// A zero fill and the body of a linalg.generic carry scalar float constants
-// while their enclosing linalg op is being converted.  Their users can be
-// erased by a later pattern, leaving the scalar behind.  Float scalars are
-// not part of the Atlas virtual stream ABI, so remove only the dead remnants
-// after the full conversion has settled.
-static void eraseDeadFloatConstants(ModuleOp module) {
-  SmallVector<Operation *> dead;
-  module.walk([&](arith::ConstantOp constant) {
-    if (isa<FloatType>(constant.getType()) &&
-        constant.getResult().use_empty())
-      dead.push_back(constant.getOperation());
-  });
-  for (Operation *constant : dead)
-    constant->erase();
+// A zero fill and a generic's destination tensor are temporary linalg
+// scaffolding. Their users can disappear in a later conversion pattern, so
+// discard the resulting dead chain to a fixed point.  This also removes its
+// f32 zero: virtual IR permits scalar i1/i32 only.
+static void eraseDeadTensorScaffolding(ModuleOp module) {
+  bool changed;
+  do {
+    changed = false;
+    SmallVector<Operation *> dead;
+    module.walk([&](Operation *op) {
+      bool removable = isa<linalg::FillOp, tensor::EmptyOp>(op) ||
+                       (isa<arith::ConstantOp>(op) && op->getNumResults() == 1 &&
+                        isa<FloatType>(op->getResult(0).getType()));
+      if (removable && llvm::all_of(op->getResults(),
+                                    [](Value value) { return value.use_empty(); }))
+        dead.push_back(op);
+    });
+    for (Operation *op : dead) {
+      op->erase();
+      changed = true;
+    }
+  } while (changed);
 }
 
 struct ConvertTritonToAtlasVirtual
@@ -107,7 +115,7 @@ struct ConvertTritonToAtlasVirtual
       signalPassFailure();
       return;
     }
-    eraseDeadFloatConstants(module);
+    eraseDeadTensorScaffolding(module);
     if (failed(attachKernelMetadata(module)))
       signalPassFailure();
   }
