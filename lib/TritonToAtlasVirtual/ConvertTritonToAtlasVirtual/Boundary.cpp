@@ -34,7 +34,7 @@ struct ConvertBoundary : ConversionPattern {
   LogicalResult
   matchAndRewrite(Operation *operation, ArrayRef<Value>,
                   ConversionPatternRewriter &rewriter) const override {
-    auto source = dyn_cast<FuncOp>(operation);
+    auto source = dyn_cast<::mlir::triton::FuncOp>(operation);
     if (!source)
       return failure();
     auto reject = [&](const Twine &reason) {
