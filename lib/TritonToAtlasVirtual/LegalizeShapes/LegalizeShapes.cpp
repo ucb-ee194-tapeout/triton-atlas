@@ -10,6 +10,7 @@
 #include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Interfaces/TilingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -224,13 +225,8 @@ static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
                                      linalg::LinalgOp op,
                                      linalg::LinalgOp &paddedOp,
                                      SmallVectorImpl<Value> &replacements) {
-  SmallVector<int64_t> dimensions;
-  SmallVector<int64_t> multiples;
-  for (auto [index, range] : llvm::enumerate(op.getStaticLoopRanges())) {
-    (void)range;
-    dimensions.push_back(index);
-    multiples.push_back(ttatlas::target::kTileSize);
-  }
+  SmallVector<OpFoldResult> paddingSizes(
+      op.getNumLoops(), rewriter.getIndexAttr(ttatlas::target::kTileSize));
 
   // Pad inputs and output init tensors with the operation's neutral element.
   // Max reductions use -inf so values introduced by padding cannot win.
@@ -261,18 +257,26 @@ static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
     paddingValues.push_back(value);
   }
 
-  linalg::LinalgPaddingOptions options;
-  options.setPaddingDimensions(dimensions);
-  options.setPadToMultipleOf(multiples);
+  auto tilingOp = dyn_cast<TilingInterface>(op.getOperation());
+  if (!tilingOp) {
+    ttatlas::emitUnsupported(op, "linalg operation does not implement the "
+                                "MLIR TilingInterface");
+    return failure();
+  }
+  linalg::PadTilingInterfaceOptions options;
+  options.setPaddingSizes(paddingSizes);
+  options.setPadToMultipleOf(true);
   options.setPaddingValues(paddingValues);
-  options.setCopyBackOp(linalg::LinalgPaddingOptions::CopyBackOp::None);
-  SmallVector<tensor::PadOp> padOps;
-  if (failed(linalg::rewriteAsPaddedOp(rewriter, op, options, paddedOp,
-                                       replacements, padOps))) {
+  FailureOr<linalg::PadTilingInterfaceResult> padded =
+      linalg::rewriteAsPaddedOp(rewriter, tilingOp, options);
+  if (failed(padded)) {
     ttatlas::emitUnsupported(
         op, "MLIR failed to pad linalg iteration dimensions");
     return failure();
   }
+  paddedOp = cast<linalg::LinalgOp>(padded->paddedOp.getOperation());
+  replacements.assign(padded->replacements);
+  SmallVector<tensor::PadOp> padOps = padded->padOps;
   for (tensor::PadOp padOp : padOps) {
     auto sourceType = dyn_cast<RankedTensorType>(padOp.getSource().getType());
     if (!sourceType)
