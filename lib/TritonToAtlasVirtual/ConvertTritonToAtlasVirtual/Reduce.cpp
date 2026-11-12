@@ -40,13 +40,12 @@ struct ConvertRowReduce : ConversionPattern {
       return ttatlas::emitUnsupported(
           op, "row-reduction input did not convert to a virtual BF16 tile");
 
-    auto input = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
     // The result may already carry the converted virtual type while this
-    // pattern runs. The linalg init operand retains the logical row shape.
+    // pattern runs, and the input is already one virtual 32x32 tile. The
+    // linalg init operand retains the logical row shape.
     auto result = dyn_cast<RankedTensorType>(op->getOperand(1).getType());
     auto dimensions = op->getAttrOfType<DenseI64ArrayAttr>("dimensions");
-    if (!input || !result || input.getShape() != ArrayRef<int64_t>{32, 32} ||
-        result.getShape() != ArrayRef<int64_t>{32} || !dimensions ||
+    if (!result || result.getShape() != ArrayRef<int64_t>{32} || !dimensions ||
         dimensions.asArrayRef() != ArrayRef<int64_t>{1})
       return ttatlas::emitUnsupported(
           op, "only a 32x32 axis-1 row reduction to tensor<32xT> is supported");
