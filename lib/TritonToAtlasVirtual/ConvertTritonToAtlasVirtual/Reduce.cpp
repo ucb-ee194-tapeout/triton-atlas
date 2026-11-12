@@ -3,6 +3,7 @@
 
 #include "Atlas/AtlasOps.h"
 #include "Atlas/AtlasTypes.h"
+#include "TTAtlas/TTAtlas.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
