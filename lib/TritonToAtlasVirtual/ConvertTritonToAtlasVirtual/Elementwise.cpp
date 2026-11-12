@@ -22,7 +22,7 @@ static Operation *createAtlasOp(ConversionPatternRewriter &rewriter,
                                 NamedAttribute attribute) {
   OperationState state(location, name);
   state.addOperands(operands);
-  state.addType(resultType);
+  state.addTypes(resultType);
   state.addAttribute(attribute.getName(), attribute.getValue());
   return rewriter.create(state);
 }

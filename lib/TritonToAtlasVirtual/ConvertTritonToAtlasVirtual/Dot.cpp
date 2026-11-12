@@ -254,7 +254,7 @@ static LogicalResult lowerKChain(Operation *root, ArrayRef<Operation *> chain,
   OpOperand &successorUse = *state.getUses().begin();
   Operation *successor = successorUse.getOwner();
   if (successorUse.getOperandNumber() != 0 ||
-      !successor->getName().getDialectNamespace().equals("atlas"))
+      successor->getName().getDialectNamespace() != "atlas")
     return ttatlas::emitUnsupported(
         root, "K-chain state successor is not an Atlas stateful operation");
 
