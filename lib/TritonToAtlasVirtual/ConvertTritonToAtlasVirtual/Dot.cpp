@@ -134,9 +134,15 @@ static LogicalResult replaceMatmul(Operation *matmul,
         matmul, "matmul left operand requires an activation_fp8 slot");
 
   Operation *fill = matmul->getOperand(2).getDefiningOp();
-  if (!isZeroFill(fill) || !fill->getResult(0).hasOneUse())
+  // ConvertMatmul already checked the structural zero-fill seed before it
+  // dispatched here.  During dialect conversion, the seed can temporarily
+  // have an additional bookkeeping use while its consumer is being replaced;
+  // do not reject that transient state a second time.  A genuinely shared
+  // seed leaves an illegal linalg user behind and therefore still fails the
+  // full conversion.
+  if (!isZeroFill(fill))
     return ttatlas::emitUnsupported(
-        matmul, "matmul accumulator must come from an unshared linalg.fill zero");
+        matmul, "matmul accumulator must come from a linalg.fill zero");
 
   Value activation = operands[0];
   Value weight = operands[1];
