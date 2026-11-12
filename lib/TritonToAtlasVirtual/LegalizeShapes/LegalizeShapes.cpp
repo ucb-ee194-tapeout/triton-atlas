@@ -224,13 +224,8 @@ static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
                                      linalg::LinalgOp op,
                                      linalg::LinalgOp &paddedOp,
                                      SmallVectorImpl<Value> &replacements) {
-  SmallVector<int64_t> dimensions;
-  SmallVector<int64_t> multiples;
-  for (auto [index, range] : llvm::enumerate(op.getStaticLoopRanges())) {
-    (void)range;
-    dimensions.push_back(index);
-    multiples.push_back(ttatlas::target::kTileSize);
-  }
+  SmallVector<OpFoldResult> paddingSizes(
+      op.getNumLoops(), rewriter.getIndexAttr(ttatlas::target::kTileSize));
 
   // Pad inputs and output init tensors with the operation's neutral element.
   // Max reductions use -inf so values introduced by padding cannot win.
@@ -261,18 +256,22 @@ static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
     paddingValues.push_back(value);
   }
 
-  linalg::LinalgPaddingOptions options;
-  options.setPaddingDimensions(dimensions);
-  options.setPadToMultipleOf(multiples);
+  // Triton 3.9's pinned MLIR models linalg padding through TilingInterface.
+  // Every iterator dimension is rounded up to the Atlas tile size.
+  linalg::PadTilingInterfaceOptions options;
+  options.setPaddingSizes(paddingSizes);
+  options.setPadToMultipleOf(true);
   options.setPaddingValues(paddingValues);
-  options.setCopyBackOp(linalg::LinalgPaddingOptions::CopyBackOp::None);
-  SmallVector<tensor::PadOp> padOps;
-  if (failed(linalg::rewriteAsPaddedOp(rewriter, op, options, paddedOp,
-                                       replacements, padOps))) {
+  FailureOr<linalg::PadTilingInterfaceResult> padded =
+      linalg::rewriteAsPaddedOp(rewriter, op, options);
+  if (failed(padded)) {
     ttatlas::emitUnsupported(
         op, "MLIR failed to pad linalg iteration dimensions");
     return failure();
   }
+  paddedOp = cast<linalg::LinalgOp>(padded->paddedOp.getOperation());
+  replacements.assign(padded->replacements);
+  SmallVector<tensor::PadOp> padOps = padded->padOps;
   for (tensor::PadOp padOp : padOps) {
     auto sourceType = dyn_cast<RankedTensorType>(padOp.getSource().getType());
     if (!sourceType)
