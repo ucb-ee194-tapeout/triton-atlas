@@ -27,12 +27,16 @@ bool isAddressMath(Operation *op) {
              op);
 }
 
-struct ConvertBoundary : OpConversionPattern<FuncOp> {
-  using OpConversionPattern::OpConversionPattern;
+struct ConvertBoundary : ConversionPattern {
+  ConvertBoundary(const TypeConverter &converter, MLIRContext *context)
+      : ConversionPattern(converter, "tt.func", PatternBenefit(1), context) {}
 
   LogicalResult
-  matchAndRewrite(FuncOp source, OpAdaptor,
+  matchAndRewrite(Operation *operation, ArrayRef<Value>,
                   ConversionPatternRewriter &rewriter) const override {
+    auto source = dyn_cast<FuncOp>(operation);
+    if (!source)
+      return failure();
     auto reject = [&](const Twine &reason) {
       ttatlas::emitUnsupported(source, reason);
       return failure();
