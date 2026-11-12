@@ -253,10 +253,38 @@ struct ConvertBoundary : ConversionPattern {
     return success();
   }
 };
+
+// Boundary construction must create the state chain before the compute
+// patterns lower its producers.  Revisit each output after its value has been
+// type-converted so it takes the virtual BF16 value directly, rather than
+// leaving a virtual-to-tensor materialization at the boundary.
+struct ConvertVirtualOutput : ConversionPattern {
+  ConvertVirtualOutput(const TypeConverter &converter, MLIRContext *context)
+      : ConversionPattern(converter,
+                          atlas::VirtualOutputBF16Op::getOperationName(),
+                          PatternBenefit(2), context) {}
+
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (operands.size() != 2 ||
+        !isa<atlas::VirtualStateType>(operands[0].getType()) ||
+        !isa<atlas::VirtualBF16Type>(operands[1].getType()) ||
+        op->getNumResults() != 1)
+      return failure();
+    OperationState replacement(op->getLoc(), op->getName());
+    replacement.addOperands(operands);
+    replacement.addTypes(op->getResultTypes());
+    replacement.addAttributes(op->getAttrs());
+    rewriter.replaceOp(op, rewriter.create(replacement)->getResults());
+    return success();
+  }
+};
 } // namespace
 
 void populateBoundaryPatterns(TypeConverter &typeConverter,
                               RewritePatternSet &patterns) {
-  patterns.add<ConvertBoundary>(typeConverter, patterns.getContext());
+  patterns.add<ConvertBoundary, ConvertVirtualOutput>(typeConverter,
+                                                      patterns.getContext());
 }
 } // namespace mlir::triton

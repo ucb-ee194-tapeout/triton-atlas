@@ -6,6 +6,7 @@
 // KernelMetadata.cpp; see Patterns.h), so adding a pattern never needs an edit
 // here. Shape follows triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
 #include "Patterns.h"
+#include "Atlas/AtlasOps.h"
 #include "Atlas/AtlasTypes.h"
 #include "TritonToAtlasVirtual/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -59,6 +60,13 @@ struct ConvertTritonToAtlasVirtual
         [](Operation *op) {
           Operation *parent = op->getParentOp();
           return parent && parent->getName().getDialectNamespace() == "linalg";
+        });
+    // Boundary.cpp initially builds the I/O state chain against tensor values,
+    // then its output pattern replaces each boundary with the converted tile.
+    target.addDynamicallyLegalOp<atlas::VirtualOutputBF16Op>(
+        [](atlas::VirtualOutputBF16Op output) {
+          return isa<atlas::VirtualStateType>(output.getOperand(0).getType()) &&
+                 isa<atlas::VirtualBF16Type>(output.getOperand(1).getType());
         });
     // Scalar arithmetic is part of the Stage 7 contract; tensor arithmetic
     // must instead be rewritten to a virtual tile operation.
