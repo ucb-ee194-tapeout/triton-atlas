@@ -7,6 +7,7 @@ def Normalize : Pass<"ttatlas-normalize", "mlir::ModuleOp"> {
     (undoing Triton's combine); unrolled K-loop dots carry ttatlas.k_chain; no scf.for with a constant trip count.
   }];
 
-  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.
-  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect"];
+  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified, and arith, whose
+  // constants and adds the bias unfold creates.
+  let dependentDialects = ["mlir::arith::ArithDialect", "mlir::ttatlas::TTAtlasDialect"];
 }
