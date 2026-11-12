@@ -52,6 +52,24 @@ bool isMatmul(Operation *op) {
 bool isFill(Operation *op) {
   return op->getName().getStringRef() == "linalg.fill";
 }
+// The readout marker pass 5 puts after a matmul chain: a linalg.generic with
+// one input and one output whose body is one arith.truncf from f32 to BF16.
+bool isReadout(Operation *op) {
+  if (op->getName().getStringRef() != "linalg.generic" ||
+      op->getNumOperands() != 2 || op->getNumRegions() != 1)
+    return false;
+  auto maps = op->getAttrOfType<ArrayAttr>("indexing_maps");
+  if (!maps || !llvm::all_of(maps, [](Attribute map) {
+        return cast<AffineMapAttr>(map).getValue().isIdentity();
+      }))
+    return false;
+  Block &body = op->getRegion(0).front();
+  auto narrow = dyn_cast<arith::TruncFOp>(&body.front());
+  return body.getOperations().size() == 2 && narrow &&
+         narrow.getIn() == body.getArgument(0) &&
+         body.getTerminator()->getOperand(0) == narrow.getResult() &&
+         narrow.getIn().getType().isF32() && narrow.getType().isBF16();
+}
 // Inside a linalg op's body: scalar code that the op's own checks cover.
 bool inLinalgBody(Operation *op) {
   for (Operation *parent = op->getParentOp(); parent;
@@ -282,10 +300,13 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
   }
 
   // Pass 5: FP8 matmul inputs; every other float value or pointer is BF16 or
-  // FP8. A matmul chain's accumulator stays in the MXU, so the matmuls, the
-  // linalg.fill that seeds them and what that fill reads and writes may be f32.
+  // FP8, inside linalg bodies too. A matmul chain's accumulator stays in the
+  // MXU, so the matmuls, the linalg.fill that seeds them and what that fill
+  // reads and writes may be f32; each chain's last matmul feeds exactly one
+  // readout marker, a linalg.generic{arith.truncf f32 -> bf16}, whose body
+  // reads that f32.
   void checkStage5(ModuleOp module) {
-    llvm::SmallPtrSet<Operation *, 16> accumulator;
+    llvm::SmallPtrSet<Operation *, 16> accumulator, readouts;
     module.walk([&](Operation *op) {
       if (!isMatmul(op))
         return;
@@ -303,15 +324,39 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
               def && llvm::all_of(def->getUsers(), isFill))
             accumulator.insert(def);
       }
+      // The chain's last matmul: no matmul accumulates onto it.
+      bool continued = llvm::any_of(op->getUses(), [](OpOperand &use) {
+        return isMatmul(use.getOwner()) &&
+               use.getOperandNumber() == use.getOwner()->getNumOperands() - 1;
+      });
+      if (continued)
+        return;
+      if (op->hasOneUse() && isReadout(*op->user_begin()))
+        readouts.insert(*op->user_begin());
+      else
+        broken(op, "the chain's last linalg.matmul doesn't feed exactly one "
+                   "readout (linalg.generic{arith.truncf f32 -> bf16})");
     });
     module.walk([&](Operation *op) {
-      if (inLinalgBody(op) || accumulator.contains(op))
+      if (accumulator.contains(op))
         return;
-      forEachValue(op, [&](Value value) {
+      for (Operation *parent = op->getParentOp(); parent;
+           parent = parent->getParentOp())
+        if (accumulator.contains(parent) || readouts.contains(parent))
+          return;
+      auto check = [&](Value value) {
         FloatType element = floatElement(value.getType());
         if (element && !element.isBF16() && !isFp8(element))
           broken(op, "float value or pointer is neither BF16 nor FP8");
-      });
+      };
+      for (Value result : op->getResults())
+        check(result);
+      if (readouts.contains(op))
+        return;
+      for (Region &region : op->getRegions())
+        for (Block &block : region)
+          for (BlockArgument argument : block.getArguments())
+            check(argument);
     });
   }
 
