@@ -9,6 +9,8 @@
 #include "Atlas/AtlasTypes.h"
 #include "TritonToAtlasVirtual/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
@@ -37,6 +39,20 @@ struct ConvertTritonToAtlasVirtual
     target.addLegalDialect<atlas::AtlasDialect, func::FuncDialect>();
     target.addLegalOp<ModuleOp>();
     target.addIllegalDialect("tt", "scf", "linalg", "tensor", "math");
+    // These are short-lived structural operands of a matmul chain. The dot
+    // pattern consumes the zero fill together with its tensor.empty seed;
+    // legalizing children first must not reject that intermediate form.
+    target.addDynamicallyLegalOp<tensor::EmptyOp>([](tensor::EmptyOp empty) {
+      return llvm::all_of(empty->getUsers(), [](Operation *user) {
+        return user->getName().getDialectNamespace() == "linalg";
+      });
+    });
+    target.addDynamicallyLegalOp<linalg::FillOp>([](linalg::FillOp fill) {
+      return fill->getNumResults() == 1 && fill->getResult(0).hasOneUse() &&
+             fill->getResult(0).use_begin()->getOwner()->getName()
+                     .getStringRef() == "linalg.matmul" &&
+             fill->getResult(0).use_begin()->getOperandNumber() == 2;
+    });
     // Scalar arithmetic is part of the Stage 7 contract; tensor arithmetic
     // must instead be rewritten to a virtual tile operation.
     target.addDynamicallyLegalDialect<arith::ArithDialect>([](Operation *op) {
