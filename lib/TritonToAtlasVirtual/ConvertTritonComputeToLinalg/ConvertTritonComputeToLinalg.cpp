@@ -6,6 +6,8 @@
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -95,26 +97,110 @@ struct TransToTranspose : OpConversionPattern<TransOp> {
   }
 };
 
+// tt.fp_to_fp -> arith.extf / arith.truncf, which the elementwise patterns
+// then turn into a linalg.generic. Pass 1 lets through BF16 <-> f32 only, and
+// truncf's default rounding is to nearest even, as tt.fp_to_fp's rtne.
+struct FpToFpToArith : OpConversionPattern<FpToFpOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FpToFpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto from = cast<FloatType>(getElementTypeOrSelf(op.getSrc().getType()));
+    auto to = cast<FloatType>(getElementTypeOrSelf(op.getType()));
+    // Equal widths (f16 <-> bf16) have no arith cast; a narrowing with a
+    // rounding other than to-nearest-even isn't what arith.truncf does.
+    if (from.getWidth() == to.getWidth())
+      return rewriter.notifyMatchFailure(op, "no arith cast between equal "
+                                             "widths");
+    if (op.getRounding() && *op.getRounding() != RoundingMode::RTNE)
+      return rewriter.notifyMatchFailure(op, "rounding is not rtne");
+    Operation *cast;
+    if (to.getWidth() > from.getWidth())
+      cast = arith::ExtFOp::create(rewriter, op.getLoc(), op.getType(),
+                                   adaptor.getSrc());
+    else
+      cast = arith::TruncFOp::create(rewriter, op.getLoc(), op.getType(),
+                                     adaptor.getSrc());
+    copyTags(op, cast);
+    rewriter.replaceOp(op, cast->getResults());
+    return success();
+  }
+};
+
+// Whether an arith / math op is elementwise compute on float tensors, which
+// becomes a linalg.generic. Integer tensors are address math and stay TTIR:
+// upstream's patterns would convert them too.
+bool isFloatElementwise(Operation *op) {
+  return OpTrait::hasElementwiseMappableTraits(op) &&
+         llvm::any_of(llvm::concat<const Type>(op->getOperandTypes(),
+                                               op->getResultTypes()),
+                      isFloatTensor);
+}
+
+// Upstream's elementwise patterns reuse an operand as the generic's output
+// when the body ignores it. Tile-and-fuse then duplicates that operand's
+// producer (32 matmuls instead of 8 on a 64x64 MLP), so each such output
+// becomes a fresh tensor.empty. A walk after the conversion, because
+// upstream's patterns offer no hook to choose the output.
+void freshOutputs(ModuleOp module) {
+  IRRewriter rewriter(module.getContext());
+  module.walk([&](linalg::GenericOp generic) {
+    for (OpOperand &init : generic.getDpsInitsMutable()) {
+      if (generic.payloadUsesValueFromOperand(&init) ||
+          init.get().getDefiningOp<tensor::EmptyOp>())
+        continue;
+      rewriter.setInsertionPoint(generic);
+      Value empty = emptyLike(rewriter, generic.getLoc(), init.get().getType());
+      rewriter.modifyOpInPlace(generic, [&] { init.set(empty); });
+    }
+  });
+}
+
+// Upstream copies an arith op's attributes onto the scalar op inside the
+// generic's body, so the ttatlas tags land there; they belong on the generic.
+// A walk after the conversion, for the same reason as freshOutputs.
+void hoistTags(ModuleOp module) {
+  module.walk([](linalg::GenericOp generic) {
+    for (Operation &op : generic.getBody()->without_terminator()) {
+      copyTags(&op, generic);
+      for (NamedAttribute attr : llvm::to_vector(op.getDiscardableAttrs()))
+        if (attr.getName().strref().starts_with("ttatlas."))
+          op.removeDiscardableAttr(attr.getName());
+    }
+  });
+}
+
 struct ConvertTritonComputeToLinalg
     : impl::ConvertTritonComputeToLinalgBase<ConvertTritonComputeToLinalg> {
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ConversionTarget target(*context);
-    target.addLegalDialect<linalg::LinalgDialect, tensor::TensorDialect,
-                           arith::ArithDialect>();
+    target.addLegalDialect<linalg::LinalgDialect, tensor::TensorDialect>();
     // Compute on float tensors only: a transpose of offsets or pointers is
     // address math and stays TTIR.
     target.addDynamicallyLegalOp<DotOp, TransOp>([](Operation *op) {
       return !isFloatTensor(op->getResult(0).getType());
     });
     // Everything else stays as it is: loads, stores, pointers, address math.
+    target.addDynamicallyLegalOp<FpToFpOp>([](Operation *op) {
+      return !isFloatTensor(op->getResult(0).getType());
+    });
+    target.addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect>(
+        [](Operation *op) { return !isFloatElementwise(op); });
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
     RewritePatternSet patterns(context);
     patterns.add<DotToMatmul, TransToTranspose>(context);
+    // Ahead of upstream's patterns, which would match tt.fp_to_fp too (it is
+    // elementwise) and put it, unconverted, into a generic's body.
+    patterns.add<FpToFpToArith>(context, /*benefit=*/2);
+    linalg::populateElementwiseToLinalgConversionPatterns(patterns);
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
-      signalPassFailure();
+      return signalPassFailure();
+    freshOutputs(getOperation());
+    hoistTags(getOperation());
   }
 };
 
