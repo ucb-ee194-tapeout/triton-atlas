@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -234,6 +235,69 @@ struct SplatToFill : OpConversionPattern<SplatOp> {
   }
 };
 
+// The value a row reduction starts from: the identity of its combine (-0.0
+// for an add, the exact one, since +0.0 + -0.0 = +0.0; -inf for a max, +inf
+// for a min). tt.reduce has no init value, and linalg.reduce needs one. Null
+// for another combine (pass 1 rejects those).
+TypedAttr reduceIdentity(Operation *combine, FloatType type) {
+  if (isa<arith::AddFOp>(combine))
+    return FloatAttr::get(type, -0.0);
+  bool max = isa<arith::MaxNumFOp, arith::MaximumFOp>(combine);
+  if (!max && !isa<arith::MinNumFOp, arith::MinimumFOp>(combine))
+    return nullptr;
+  return FloatAttr::get(
+      type, APFloat::getInf(type.getFloatSemantics(), /*Negative=*/max));
+}
+
+// tt.reduce of one float tensor -> linalg.reduce over the same axis, its
+// output filled with the combine's identity, its body the same combine.
+struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ReduceOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Block &body = op.getCombineOp().front();
+    auto type = dyn_cast<RankedTensorType>(op.getResult()[0].getType());
+    if (op.getNumOperands() != 1 || !type || body.getOperations().size() != 2)
+      return rewriter.notifyMatchFailure(op, "not one combine of one tensor");
+    Operation *combine = &body.front();
+    auto args = body.getArguments();
+    bool onArgs = combine->getNumOperands() == 2 &&
+                  ((combine->getOperand(0) == args[0] &&
+                    combine->getOperand(1) == args[1]) ||
+                   (combine->getOperand(0) == args[1] &&
+                    combine->getOperand(1) == args[0]));
+    if (!onArgs || body.getTerminator()->getOperand(0) != combine->getResult(0))
+      return rewriter.notifyMatchFailure(op, "the body isn't one combine of "
+                                             "its two arguments");
+    TypedAttr identity =
+        reduceIdentity(combine, cast<FloatType>(type.getElementType()));
+    if (!identity)
+      return rewriter.notifyMatchFailure(op, "no identity for this combine");
+    Location loc = op.getLoc();
+    Value start = arith::ConstantOp::create(rewriter, loc, identity);
+    Value init = linalg::FillOp::create(rewriter, loc, start,
+                                        emptyLike(rewriter, loc, type))
+                     .getResult(0);
+    auto reduce = linalg::ReduceOp::create(
+        rewriter, loc, adaptor.getSrcs(), ValueRange{init},
+        SmallVector<int64_t>{op.getAxis()},
+        [&](OpBuilder &builder, Location bodyLoc, ValueRange blockArgs) {
+          // linalg.reduce's body takes (element, accumulator); Triton's
+          // combine takes the accumulator first.
+          IRMapping mapping;
+          mapping.map(body.getArgument(0), blockArgs[1]);
+          mapping.map(body.getArgument(1), blockArgs[0]);
+          Operation *step = builder.clone(*combine, mapping);
+          linalg::YieldOp::create(builder, bodyLoc, step->getResult(0));
+        });
+    copyTags(op, reduce);
+    rewriter.replaceOp(op, reduce->getResults());
+    return success();
+  }
+};
+
 // Whether a tt.expand_dims only feeds broadcasts that absorb it; then it
 // disappears with them. Any other float expand_dims becomes
 // tensor.expand_shape.
@@ -316,6 +380,9 @@ struct ConvertTritonComputeToLinalg
         [](Operation *op) {
           return !isFloatTensor(op->getResult(0).getType());
         });
+    target.addDynamicallyLegalOp<ReduceOp>([](ReduceOp op) {
+      return !llvm::any_of(op.getOperandTypes(), isFloatTensor);
+    });
     target.addDynamicallyLegalOp<ExpandDimsOp>([](ExpandDimsOp op) {
       return !isFloatTensor(op.getType()) || absorbedByBroadcasts(op);
     });
@@ -326,7 +393,7 @@ struct ConvertTritonComputeToLinalg
 
     RewritePatternSet patterns(context);
     patterns.add<DotToMatmul, TransToTranspose, BroadcastToLinalg,
-                 ExpandDimsToExpandShape, SplatToFill>(context);
+                 ExpandDimsToExpandShape, SplatToFill, ReduceToLinalg>(context);
     // Ahead of upstream's patterns, which would match tt.fp_to_fp too (it is
     // elementwise) and put it, unconverted, into a generic's body.
     patterns.add<FpToFpToArith>(context, /*benefit=*/2);
