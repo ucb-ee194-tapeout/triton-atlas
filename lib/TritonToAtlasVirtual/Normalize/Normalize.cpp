@@ -1,8 +1,11 @@
 // Pass 2, ttatlas-normalize. Contract: triton-atlas design agenda, page
-// "Pass 2 · ttatlas-normalize". It moves a dot's bias out to a separate add,
-// so every dot starts from zero or from the previous dot of its chain.
+// "Pass 2 · ttatlas-normalize". It unrolls every constant-trip scf.for, moves
+// a dot's bias out to a separate add, so every dot starts from zero or from
+// the previous dot of its chain, and tags each chain's dots ttatlas.k_chain.
 #include "TritonToAtlasVirtual/Passes.h"
 
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -13,9 +16,35 @@ namespace mlir::triton {
 
 namespace {
 
+namespace tta = mlir::ttatlas;
+
+// Unrolls every scf.for, innermost first, with MLIR's loopUnrollFull (as the
+// page says: no hand-written unroller). Pass 1 lets through only loops with a
+// constant trip count. Why unroll: each K step loads a different tile, and
+// atlas-mlir at our pin accepts only DMA addresses built from constants
+// (lib/AtlasOps.cpp:196-201 @ 8ee175c), so a loop body can't name "the next
+// tile" (atlas-hw: pass 2 page, "Why unroll constant-count loops"). Inner
+// loops go first, so a bound computed from an outer loop's counter fails here;
+// pass 1 rejects it as a runtime trip count.
+LogicalResult unrollLoops(ModuleOp module) {
+  SmallVector<scf::ForOp> loops;
+  module.walk([&](scf::ForOp loop) { loops.push_back(loop); }); // inner first
+  for (scf::ForOp loop : loops)
+    if (failed(loopUnrollFull(loop)))
+      return loop.emitError(
+          "ttatlas-normalize: can't unroll this loop: its trip count isn't a "
+          "constant (ttatlas-validate-ttir rejects such loops)");
+  return success();
+}
+
 // The dot that accumulates onto `dot` next: its only user, in the same block,
 // taking `dot` as the accumulator (operand c). Null if there is none. A loop
 // or branch boundary ends a chain.
+// Known limit: a dot whose result is also used elsewhere (a partial sum that
+// is returned or stored) ends its chain, and the next dot starts a new chain.
+// The result stays correct: the bias unfold moves the partial sum to an add
+// after the new chain. It costs one extra MXU readout and VPU add where the
+// MXU could have kept accumulating.
 DotOp nextInChain(DotOp dot) {
   if (!dot->hasOneUse())
     return nullptr;
@@ -73,10 +102,35 @@ void unfoldBias(ArrayRef<DotOp> chain) {
   last.getResult().replaceAllUsesExcept(add, add);
 }
 
+// Tags the dots of a chain of two or more with their place in it. Tagged by
+// structure, not by loop index, so chains with no loop left also get tagged
+// and pass the stage-2 check: those Triton already unrolled
+// (tl.range(..., loop_unroll_factor=2)) and combine's dot-on-dot folds. A lone
+// dot needs no tag: it starts from zero.
+// Who reads the tag (TTAtlas.h kKChain, "pass 2, read by pass 3"): the stage-2
+// contract check (ttatlas-verify-contract) and pass 3, which links the chain
+// into one linalg.fill -> linalg.matmul -> ... def-use chain; after pass 3 the
+// chain is that structure, not the tag. Pass 2 finds chains by structure too,
+// but the tag is the contract between passes 2 and 3, so keep both.
+void tagChain(MutableArrayRef<DotOp> chain, int32_t id) {
+  int32_t len = chain.size();
+  for (auto [pos, dot] : llvm::enumerate(chain))
+    dot->setAttr(tta::kKChain,
+                 tta::KChainAttr::get(dot.getContext(), id, int32_t(pos), len));
+}
+
 struct Normalize : impl::NormalizeBase<Normalize> {
   void runOnOperation() override {
-    for (SmallVector<DotOp> &chain : findChains(getOperation()))
+    // Unroll first: a K loop's dots form a chain only once unrolled, and the
+    // bias unfold must see the whole chain.
+    if (failed(unrollLoops(getOperation())))
+      return signalPassFailure();
+    int32_t id = 0;
+    for (SmallVector<DotOp> &chain : findChains(getOperation())) {
       unfoldBias(chain);
+      if (chain.size() > 1)
+        tagChain(chain, id++);
+    }
   }
 };
 
