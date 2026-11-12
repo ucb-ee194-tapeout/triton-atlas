@@ -90,11 +90,14 @@ static bool isZeroFill(Operation *fill) {
 
 static void eraseZeroFill(Operation *fill,
                           ConversionPatternRewriter &rewriter) {
-  if (fill->getNumResults() != 1 || !fill->getResult(0).use_empty())
+  if (fill->getNumResults() != 1)
     return;
   Operation *scalar = fill->getOperand(0).getDefiningOp();
   Value destination = fill->getOperand(1);
-  rewriter.eraseOp(fill);
+  // Replace the fill result before erasing it.  In a conversion rewrite its
+  // matmul consumer can still be present in the rewriter transaction, even
+  // though it has already been replaced by the virtual MXU op.
+  rewriter.replaceOp(fill, destination);
   if (Operation *empty = destination.getDefiningOp();
       empty && empty->getName().getStringRef() == "tensor.empty" &&
       empty->getResult(0).use_empty())
@@ -335,20 +338,8 @@ static LogicalResult lowerKChain(Operation *root, ArrayRef<Operation *> chain,
     rewriter.eraseOp(matmul);
 
   Operation *fill = root->getOperand(2).getDefiningOp();
-  if (fill && fill->getName().getStringRef() == "linalg.fill") {
-    Operation *scalar = fill->getOperand(0).getDefiningOp();
-    Value destination = fill->getOperand(1);
-    rewriter.eraseOp(fill);
-    if (Operation *empty = destination.getDefiningOp();
-        empty && empty->getName().getStringRef() == "tensor.empty" &&
-        empty->getResult(0).use_empty())
-      rewriter.eraseOp(empty);
-    if (scalar && scalar->getName().getStringRef() == "arith.constant" &&
-        llvm::all_of(scalar->getResults(), [](Value result) {
-          return result.use_empty();
-        }))
-      rewriter.eraseOp(scalar);
-  }
+  if (fill && fill->getName().getStringRef() == "linalg.fill")
+    eraseZeroFill(fill, rewriter);
   return success();
 }
 

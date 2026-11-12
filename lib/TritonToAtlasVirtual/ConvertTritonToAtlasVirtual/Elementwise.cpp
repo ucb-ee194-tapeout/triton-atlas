@@ -76,6 +76,19 @@ static void eraseDeadConstants(ArrayRef<Operation *> constants,
       rewriter.eraseOp(constant);
 }
 
+static Operation *genericDestinationToErase(Operation *generic,
+                                            Value destination) {
+  Operation *empty = destination.getDefiningOp();
+  if (!empty || empty->getName().getStringRef() != "tensor.empty" ||
+      !empty->getResult(0).hasOneUse() ||
+      *empty->getResult(0).getUsers().begin() != generic)
+    return nullptr;
+  // The generic has just been replaced, but can remain visible to the
+  // rewriter until this transaction commits. Its fresh tensor.empty is
+  // nevertheless dead in the replacement program.
+  return empty;
+}
+
 struct EraseTileCast : ConversionPattern {
   EraseTileCast(const TypeConverter &converter, MLIRContext *context,
                 StringRef rootName)
@@ -175,12 +188,11 @@ struct ConvertGeneric : ConversionPattern {
             ValueRange{source}, outputType,
             rewriter.getNamedAttr("kind", rewriter.getStringAttr("relu")));
         Value destination = op->getOperand(op->getNumOperands() - 1);
+        Operation *empty = genericDestinationToErase(op, destination);
         SmallVector<Operation *> constants = collectInputConstants(op);
         rewriter.replaceOp(op, relu->getResults());
         eraseDeadConstants(constants, rewriter);
-        if (Operation *empty = destination.getDefiningOp();
-            empty && empty->getName().getStringRef() == "tensor.empty" &&
-            empty->getResult(0).use_empty())
+        if (empty)
           rewriter.eraseOp(empty);
         return success();
       }
@@ -201,12 +213,11 @@ struct ConvertGeneric : ConversionPattern {
         outputType,
         rewriter.getNamedAttr("kind", rewriter.getStringAttr(kind)));
     Value destination = op->getOperand(op->getNumOperands() - 1);
+    Operation *empty = genericDestinationToErase(op, destination);
     SmallVector<Operation *> constants = collectInputConstants(op);
     rewriter.replaceOp(op, binary->getResults());
     eraseDeadConstants(constants, rewriter);
-    if (Operation *empty = destination.getDefiningOp();
-        empty && empty->getName().getStringRef() == "tensor.empty" &&
-        empty->getResult(0).use_empty())
+    if (empty)
       rewriter.eraseOp(empty);
     return success();
   }
