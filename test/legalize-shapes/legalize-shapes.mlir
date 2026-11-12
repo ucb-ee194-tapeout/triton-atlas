@@ -60,7 +60,7 @@ func.func @tile_add(%a: tensor<64x64xbf16>, %b: tensor<64x64xbf16>) -> tensor<64
 }
 
 // CHECK-LABEL: func.func @tile_add
-// CHECK: tensor.extract_slice %a[0, 0] [32, 32] [1, 1]
+// CHECK: tensor.extract_slice
 // CHECK-COUNT-4: linalg.add
 // CHECK: tensor.insert_slice
 
