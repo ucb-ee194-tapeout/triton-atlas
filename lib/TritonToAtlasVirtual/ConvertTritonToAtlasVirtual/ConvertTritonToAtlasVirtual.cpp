@@ -35,6 +35,7 @@ struct ConvertTritonToAtlasVirtual
     // No TTIR or tensor compute operation may leak into the virtual stage.
     ConversionTarget target(*context);
     target.addLegalDialect<atlas::AtlasDialect, func::FuncDialect>();
+    target.addLegalOp<ModuleOp>();
     target.addIllegalDialect("tt", "scf", "linalg", "tensor", "math");
     // Scalar arithmetic is part of the Stage 7 contract; tensor arithmetic
     // must instead be rewritten to a virtual tile operation.
