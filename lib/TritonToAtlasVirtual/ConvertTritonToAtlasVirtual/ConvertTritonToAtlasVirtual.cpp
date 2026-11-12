@@ -8,7 +8,10 @@
 #include "Patterns.h"
 #include "Atlas/AtlasTypes.h"
 #include "TritonToAtlasVirtual/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 
 namespace mlir::triton {
 
@@ -32,8 +35,17 @@ struct ConvertTritonToAtlasVirtual
     // No TTIR or tensor compute operation may leak into the virtual stage.
     ConversionTarget target(*context);
     target.addLegalDialect<atlas::AtlasDialect, func::FuncDialect>();
-    target.addIllegalDialect("tt", "scf", "linalg", "tensor", "arith",
-                             "math");
+    target.addIllegalDialect("tt", "scf", "linalg", "tensor", "math");
+    // Scalar arithmetic is part of the Stage 7 contract; tensor arithmetic
+    // must instead be rewritten to a virtual tile operation.
+    target.addDynamicallyLegalDialect<arith::ArithDialect>([](Operation *op) {
+      return llvm::all_of(op->getOperandTypes(), [](Type type) {
+               return !isa<TensorType>(type);
+             }) &&
+             llvm::all_of(op->getResultTypes(), [](Type type) {
+               return !isa<TensorType>(type);
+             });
+    });
     target.addIllegalOp<FuncOp, LoadOp, StoreOp>();
     target.addDynamicallyLegalOp<func::FuncOp>([&](func::FuncOp function) {
       FunctionType signature = function.getFunctionType();
