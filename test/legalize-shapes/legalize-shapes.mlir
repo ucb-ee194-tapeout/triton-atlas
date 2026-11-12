@@ -13,12 +13,35 @@ func.func @single_tile(%a: tensor<32x32xf32>, %b: tensor<32x32xf32>) -> tensor<3
 
 // -----
 
-func.func @non_tile_multiple(%a: tensor<50x32xf32>) -> tensor<50x32xf32> {
-  %cst = arith.constant 0.0 : f32
-  // expected-error @+1 {{atlas: unsupported linalg.fill: iteration dimensions must be static multiples of 32}}
-  %result = linalg.fill ins(%cst : f32) outs(%a : tensor<50x32xf32>) -> tensor<50x32xf32>
+// A partial edge is padded to whole tiles with the add neutral (zero), then
+// split into two constant 32x32 tile computations. The tensor.pad tag retains
+// the logical 50x32 shape for the boundary pass.
+func.func @pad_elementwise_edge(%a: tensor<50x32xf32>, %b: tensor<50x32xf32>) -> tensor<50x32xf32> {
+  %empty = tensor.empty() : tensor<50x32xf32>
+  %result = linalg.add ins(%a, %b : tensor<50x32xf32>, tensor<50x32xf32>) outs(%empty : tensor<50x32xf32>) -> tensor<50x32xf32>
   return %result : tensor<50x32xf32>
 }
+
+// CHECK-LABEL: func.func @pad_elementwise_edge
+// CHECK: tensor.pad {{.*}}ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [50, 32]>
+// CHECK-COUNT-2: linalg.add
+
+// -----
+
+// Max reductions need -inf in the padded lanes, otherwise an edge lane could
+// incorrectly become the result. The 50 rows become two full 32-row tiles.
+func.func @pad_max_reduction(%input: tensor<50x32xf32>, %init: tensor<50xf32>) -> tensor<50xf32> {
+  %result = linalg.reduce ins(%input : tensor<50x32xf32>) outs(%init : tensor<50xf32>) dimensions = [1]
+  (%lhs: f32, %rhs: f32) {
+    %max = arith.maxnumf %lhs, %rhs : f32
+    linalg.yield %max : f32
+  }
+  return %result : tensor<50xf32>
+}
+
+// CHECK-LABEL: func.func @pad_max_reduction
+// CHECK: tensor.pad {{.*}}ttatlas.pad = #ttatlas.pad<neutral = neg_inf, logical_shape = [50, 32]>
+// CHECK-COUNT-2: linalg.reduce
 
 // -----
 
