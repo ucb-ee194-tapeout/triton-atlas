@@ -31,12 +31,13 @@ struct ConvertRowReduce : ConversionPattern {
 
   LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
                                 ConversionPatternRewriter &rewriter) const override {
-    if (op->getNumOperands() != 2 || operands.size() != 2 ||
-        op->getNumResults() != 1 ||
-        !isa<atlas::VirtualBF16Type>(operands.front().getType()) ||
-        !isa<atlas::VirtualBF16Type>(
-            getTypeConverter()->convertType(op->getResult(0).getType())))
-      return failure();
+    if (op->getNumOperands() != 2 || operands.empty() ||
+        op->getNumResults() != 1)
+      return ttatlas::emitUnsupported(
+          op, "expected a one-result row reduction with input and init");
+    if (!isa<atlas::VirtualBF16Type>(operands.front().getType()))
+      return ttatlas::emitUnsupported(
+          op, "row-reduction input did not convert to a virtual BF16 tile");
 
     auto input = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
     auto result = dyn_cast<RankedTensorType>(op->getResult(0).getType());
@@ -44,11 +45,13 @@ struct ConvertRowReduce : ConversionPattern {
     if (!input || !result || input.getShape() != ArrayRef<int64_t>{32, 32} ||
         result.getShape() != ArrayRef<int64_t>{32} || !dimensions ||
         dimensions.asArrayRef() != ArrayRef<int64_t>{1})
-      return failure();
+      return ttatlas::emitUnsupported(
+          op, "only a 32x32 axis-1 row reduction to tensor<32xT> is supported");
 
     StringRef kind = reductionKind(op);
     if (kind.empty())
-      return failure();
+      return ttatlas::emitUnsupported(
+          op, "row reduction requires an add or maximum body");
     OperationState state(op->getLoc(),
                          atlas::VirtualVPUReduceOp::getOperationName());
     state.addOperands(operands.front());
