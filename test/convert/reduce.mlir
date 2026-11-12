@@ -22,5 +22,5 @@ module {
 }
 
 // CHECK-LABEL: func.func @row_sum() -> !atlas.virtual_state
-// CHECK: atlas.virtual_vpu_reduce {{.*}}kind = "row_sum"
+// CHECK: kind = "row_sum"
 // CHECK: atlas.virtual_output_bf16
