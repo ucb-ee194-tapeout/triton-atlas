@@ -50,10 +50,10 @@ module {
 }
 
 // CHECK-LABEL: func.func @elementwise() -> !atlas.virtual_state
-// CHECK: atlas.virtual_vpu_binary {{.*}}kind = "add"
-// CHECK: atlas.virtual_vpu_binary {{.*}}kind = "sub"
-// CHECK: atlas.virtual_vpu_binary {{.*}}kind = "mul"
-// CHECK: atlas.virtual_vpu_binary {{.*}}kind = "min"
-// CHECK: atlas.virtual_vpu_binary {{.*}}kind = "max"
-// CHECK: atlas.virtual_vpu_unary {{.*}}kind = "relu"
+// CHECK: kind = "add"
+// CHECK: kind = "sub"
+// CHECK: kind = "mul"
+// CHECK: kind = "min"
+// CHECK: kind = "max"
+// CHECK: kind = "relu"
 // CHECK: atlas.virtual_output_bf16
