@@ -493,17 +493,31 @@ static LogicalResult fuseSlicedProducers(ModuleOp module) {
 }
 
 static LogicalResult unrollTileLoops(ModuleOp module) {
-  SmallVector<scf::ForOp> loops;
-  module.walk([&](scf::ForOp loop) { loops.push_back(loop); });
-  // Inner loops first, so a matmul's K accumulator chain is explicit before
-  // its enclosing M/N tiles are replicated.
-  for (scf::ForOp loop : llvm::reverse(loops))
-    if (failed(loopUnrollFull(loop))) {
-      ttatlas::emitUnsupported(
-          loop, "tile loop does not have a statically known trip count");
-      return failure();
+  // Unrolling an outer loop can clone an inner loop after it was collected.
+  // Iterate to a fixed point so every cloned tile loop is also expanded to
+  // constant slices. The rank-two Atlas surface needs only a few rounds; the
+  // bound prevents a non-unrollable loop from spinning indefinitely.
+  for (unsigned round = 0; round != 8; ++round) {
+    SmallVector<scf::ForOp> loops;
+    module.walk([&](scf::ForOp loop) { loops.push_back(loop); });
+    if (loops.empty())
+      return success();
+    for (scf::ForOp loop : loops) {
+      if (!loop->getBlock())
+        continue;
+      if (failed(loopUnrollFull(loop))) {
+        ttatlas::emitUnsupported(
+            loop, "tile loop does not have a statically known trip count");
+        return failure();
+      }
     }
-  return success();
+  }
+  SmallVector<scf::ForOp> remaining;
+  module.walk([&](scf::ForOp loop) { remaining.push_back(loop); });
+  if (!remaining.empty())
+    ttatlas::emitUnsupported(remaining.front(),
+                             "tile loop did not fully unroll");
+  return remaining.empty() ? success() : failure();
 }
 
 struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
