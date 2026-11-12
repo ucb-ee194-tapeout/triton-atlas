@@ -53,6 +53,13 @@ struct ConvertTritonToAtlasVirtual
                      .getStringRef() == "linalg.matmul" &&
              fill->getResult(0).use_begin()->getOperandNumber() == 2;
     });
+    // The region bodies are erased together with the enclosing linalg op.
+    // Keep their linalg.yield syntax legal until that enclosing rewrite runs.
+    target.addDynamicallyLegalDialect<linalg::LinalgDialect>(
+        [](Operation *op) {
+          Operation *parent = op->getParentOp();
+          return parent && parent->getName().getDialectNamespace() == "linalg";
+        });
     // Scalar arithmetic is part of the Stage 7 contract; tensor arithmetic
     // must instead be rewritten to a virtual tile operation.
     target.addDynamicallyLegalDialect<arith::ArithDialect>([](Operation *op) {
