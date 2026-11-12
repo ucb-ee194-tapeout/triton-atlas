@@ -14,6 +14,7 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 
 namespace mlir::triton {
@@ -22,6 +23,22 @@ namespace mlir::triton {
 #include "TritonToAtlasVirtual/Passes.h.inc"
 
 namespace {
+
+// A zero fill and the body of a linalg.generic carry scalar float constants
+// while their enclosing linalg op is being converted.  Their users can be
+// erased by a later pattern, leaving the scalar behind.  Float scalars are
+// not part of the Atlas virtual stream ABI, so remove only the dead remnants
+// after the full conversion has settled.
+static void eraseDeadFloatConstants(ModuleOp module) {
+  SmallVector<Operation *> dead;
+  module.walk([&](arith::ConstantOp constant) {
+    if (isa<FloatType>(constant.getType()) &&
+        constant.getResult().use_empty())
+      dead.push_back(constant.getOperation());
+  });
+  for (Operation *constant : dead)
+    constant->erase();
+}
 
 struct ConvertTritonToAtlasVirtual
     : impl::ConvertTritonToAtlasVirtualBase<ConvertTritonToAtlasVirtual> {
@@ -86,8 +103,12 @@ struct ConvertTritonToAtlasVirtual
                  atlas::VirtualStateType::get(context);
     });
     ModuleOp module = getOperation();
-    if (failed(applyFullConversion(module, target, std::move(patterns))) ||
-        failed(attachKernelMetadata(module)))
+    if (failed(applyFullConversion(module, target, std::move(patterns)))) {
+      signalPassFailure();
+      return;
+    }
+    eraseDeadFloatConstants(module);
+    if (failed(attachKernelMetadata(module)))
       signalPassFailure();
   }
 };
