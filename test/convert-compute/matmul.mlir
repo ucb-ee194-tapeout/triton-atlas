@@ -4,6 +4,8 @@
 // form (hand-written): accumulators zero, or the previous dot of a tagged K chain.
 
 // CHECK-LABEL: tt.func @dot_trans
+// The zero tensor the dot started from is dead after the fill replaces it, and is erased.
+// CHECK-NOT: arith.constant dense
 // CHECK-NOT: tt.trans
 // CHECK: %[[WT:.*]] = linalg.transpose ins(%{{.*}} : tensor<32x32xf8E4M3FN>) outs(%{{.*}} : tensor<32x32xf8E4M3FN>) permutation = [1, 0]
 // CHECK: %[[ZERO:.*]] = arith.constant 0.000000e+00 : f32

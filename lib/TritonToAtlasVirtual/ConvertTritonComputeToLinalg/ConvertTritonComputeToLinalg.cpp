@@ -9,8 +9,10 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 namespace mlir::triton {
@@ -128,6 +130,120 @@ struct FpToFpToArith : OpConversionPattern<FpToFpOp> {
   }
 };
 
+// The dimensions a tt.broadcast stretches from size 1.
+SmallVector<int64_t> broadcastDims(BroadcastOp op) {
+  auto from = cast<RankedTensorType>(op.getSrc().getType());
+  auto to = cast<RankedTensorType>(op.getType());
+  SmallVector<int64_t> dims;
+  for (int64_t i = 0, e = to.getRank(); i < e; ++i)
+    if (from.getDimSize(i) != to.getDimSize(i))
+      dims.push_back(i);
+  return dims;
+}
+
+// Whether `broadcast` stretches exactly the dimension `expand` added, so the
+// pair becomes one linalg.broadcast of the expand's source.
+bool absorbs(BroadcastOp broadcast, ExpandDimsOp expand) {
+  return broadcastDims(broadcast) ==
+         ArrayRef<int64_t>{int64_t(expand.getAxis())};
+}
+
+// tt.broadcast of floats -> one linalg.broadcast. linalg.broadcast adds
+// dimensions instead of stretching size-1 ones, so its input is the source
+// without the dimensions being broadcast: the value under a tt.expand_dims
+// that added exactly those (the bias case; tensor.expand_shape then
+// linalg.broadcast doesn't verify, so the pair becomes one linalg.broadcast),
+// or else the source with those unit dimensions collapsed away.
+struct BroadcastToLinalg : OpConversionPattern<BroadcastOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(BroadcastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto from = cast<RankedTensorType>(op.getSrc().getType());
+    auto to = cast<RankedTensorType>(op.getType());
+    SmallVector<int64_t> dims = broadcastDims(op);
+    if (dims.empty()) {
+      rewriter.replaceOp(op, adaptor.getSrc());
+      return success();
+    }
+    Value input;
+    if (auto expand = op.getSrc().getDefiningOp<ExpandDimsOp>();
+        expand && absorbs(op, expand)) {
+      input = rewriter.getRemappedValue(expand.getSrc());
+    } else {
+      SmallVector<int64_t> shape;
+      for (int64_t i = 0, e = from.getRank(); i < e; ++i)
+        if (!llvm::is_contained(dims, i))
+          shape.push_back(from.getDimSize(i));
+      auto collapsed = RankedTensorType::get(shape, from.getElementType());
+      std::optional<SmallVector<ReassociationIndices>> groups =
+          getReassociationIndicesForCollapse(from.getShape(), shape);
+      if (!groups)
+        return rewriter.notifyMatchFailure(op, "can't drop the unit dims");
+      input = tensor::CollapseShapeOp::create(rewriter, loc, collapsed,
+                                              adaptor.getSrc(), *groups);
+    }
+    auto broadcast = linalg::BroadcastOp::create(
+        rewriter, loc, input, emptyLike(rewriter, loc, to), dims);
+    copyTags(op, broadcast);
+    rewriter.replaceOp(op, broadcast->getResults());
+    return success();
+  }
+};
+
+// tt.expand_dims of floats that no broadcast absorbs -> tensor.expand_shape.
+// Known limit: neither this nor the tensor.collapse_shape BroadcastToLinalg
+// makes for a broadcast without a matching expand_dims has a lowering later
+// (pass 4 can't tile a reshape, pass 7 doesn't match it), so such kernels fail
+// in pass 7. The bias pattern (expand_dims then broadcast of the added
+// dimension) never needs them.
+struct ExpandDimsToExpandShape : OpConversionPattern<ExpandDimsOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(ExpandDimsOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto from = cast<RankedTensorType>(op.getSrc().getType());
+    auto to = cast<RankedTensorType>(op.getType());
+    std::optional<SmallVector<ReassociationIndices>> groups =
+        getReassociationIndicesForReshape(from, to);
+    if (!groups)
+      return rewriter.notifyMatchFailure(op, "no reassociation");
+    rewriter.replaceOpWithNewOp<tensor::ExpandShapeOp>(op, to, adaptor.getSrc(),
+                                                       *groups);
+    return success();
+  }
+};
+
+// tt.splat of a float scalar -> linalg.fill. (A splat of a constant is
+// usually an arith.constant already.)
+struct SplatToFill : OpConversionPattern<SplatOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(SplatOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto fill = linalg::FillOp::create(rewriter, loc, adaptor.getSrc(),
+                                       emptyLike(rewriter, loc, op.getType()));
+    copyTags(op, fill);
+    rewriter.replaceOp(op, fill->getResults());
+    return success();
+  }
+};
+
+// Whether a tt.expand_dims only feeds broadcasts that absorb it; then it
+// disappears with them. Any other float expand_dims becomes
+// tensor.expand_shape.
+bool absorbedByBroadcasts(ExpandDimsOp op) {
+  return !op->use_empty() && llvm::all_of(op->getUsers(), [&](Operation *user) {
+    auto broadcast = dyn_cast<BroadcastOp>(user);
+    return broadcast && absorbs(broadcast, op);
+  });
+}
+
 // Whether an arith / math op is elementwise compute on float tensors, which
 // becomes a linalg.generic. Integer tensors are address math and stay TTIR:
 // upstream's patterns would convert them too.
@@ -171,6 +287,20 @@ void hoistTags(ModuleOp module) {
   });
 }
 
+// Erases every trivially dead op in the module with MLIR's region DCE, which
+// removes chains of dead ops too. The ones that matter are what the conversion
+// left dead: the float expand_dims the broadcasts absorbed (the stage-3
+// contract allows no float tt op) and the zero tensor constants a dot started
+// from (the matmul gets a linalg.fill instead). Any other dead op goes as well,
+// an unused tt.load included (it only reads), as canonicalize would remove it.
+// Done here because no canonicalize runs between this pass and pass 4
+// (Pipeline.cpp cleans up after passes 2, 4 and 5), so pass 4 sees only live
+// IR. The kernel's arguments stay.
+void eraseDeadLeftovers(ModuleOp module) {
+  IRRewriter rewriter(module.getContext());
+  (void)runRegionDCE(rewriter, module->getRegions());
+}
+
 struct ConvertTritonComputeToLinalg
     : impl::ConvertTritonComputeToLinalgBase<ConvertTritonComputeToLinalg> {
   void runOnOperation() override {
@@ -182,16 +312,21 @@ struct ConvertTritonComputeToLinalg
     target.addDynamicallyLegalOp<DotOp, TransOp>([](Operation *op) {
       return !isFloatTensor(op->getResult(0).getType());
     });
-    // Everything else stays as it is: loads, stores, pointers, address math.
-    target.addDynamicallyLegalOp<FpToFpOp>([](Operation *op) {
-      return !isFloatTensor(op->getResult(0).getType());
+    target.addDynamicallyLegalOp<FpToFpOp, BroadcastOp, SplatOp>(
+        [](Operation *op) {
+          return !isFloatTensor(op->getResult(0).getType());
+        });
+    target.addDynamicallyLegalOp<ExpandDimsOp>([](ExpandDimsOp op) {
+      return !isFloatTensor(op.getType()) || absorbedByBroadcasts(op);
     });
     target.addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect>(
         [](Operation *op) { return !isFloatElementwise(op); });
+    // Everything else stays as it is: loads, stores, pointers, address math.
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
     RewritePatternSet patterns(context);
-    patterns.add<DotToMatmul, TransToTranspose>(context);
+    patterns.add<DotToMatmul, TransToTranspose, BroadcastToLinalg,
+                 ExpandDimsToExpandShape, SplatToFill>(context);
     // Ahead of upstream's patterns, which would match tt.fp_to_fp too (it is
     // elementwise) and put it, unconverted, into a generic's body.
     patterns.add<FpToFpToArith>(context, /*benefit=*/2);
@@ -199,6 +334,7 @@ struct ConvertTritonComputeToLinalg
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
       return signalPassFailure();
+    eraseDeadLeftovers(getOperation());
     freshOutputs(getOperation());
     hoistTags(getOperation());
   }
