@@ -2,7 +2,10 @@
 
 // Pass 4's contract: every linalg value is one tile (32 or 32x32); every linalg.matmul carries ttatlas.mxu; every
 // linalg.fill writes a fresh tile-sized tensor.empty; a larger tt.load is read only through constant tile slices, and
-// a larger stored tensor is built only from constant tile insert_slices over a tensor.empty, one per tile.
+// a larger stored tensor is built only from constant tile insert_slices over a tensor.empty, one per tile. A load or
+// store that is not whole tiles has one more form each: a load read only by a tensor.pad up to whole tiles (one tagged
+// pad up to a tile, or a pad read through tile slices), and a stored constant crop, from the origin, of a tile or of a
+// tensor built from tiles.
 
 tt.func @ok(%in: tensor<64x64x!tt.ptr<bf16>>, %out: tensor<64x64x!tt.ptr<bf16>>) {
   %x = tt.load %in : tensor<64x64x!tt.ptr<bf16>>
@@ -156,5 +159,70 @@ tt.func @linalg_1d_large(%x: tensor<64xbf16>) {
   %e = tensor.empty() : tensor<64xbf16>
   // expected-error @below {{contract of pass 4 broken: linalg value is not one tile (32 or 32x32)}}
   %s = linalg.add ins(%x, %x : tensor<64xbf16>, tensor<64xbf16>) outs(%e : tensor<64xbf16>) -> tensor<64xbf16>
+  tt.return
+}
+
+// -----
+
+// A 16x16 load padded to one tagged tile, a 64x16 load padded to two tiles read through slices (the pad needs no tag
+// then: each padded tile's slice has one), and a 16x16 crop of a tile stored.
+tt.func @padded_load_and_cropped_store(%in: tensor<16x16x!tt.ptr<bf16>>, %in2: tensor<64x16x!tt.ptr<bf16>>, %out: tensor<16x16x!tt.ptr<bf16>>) {
+  %z = arith.constant 0.0 : bf16
+  %x = tt.load %in : tensor<16x16x!tt.ptr<bf16>>
+  %p = tensor.pad %x low[0, 0] high[16, 16] {
+  ^bb0(%i: index, %j: index):
+    tensor.yield %z : bf16
+  } {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 16]>} : tensor<16x16xbf16> to tensor<32x32xbf16>
+  %x2 = tt.load %in2 : tensor<64x16x!tt.ptr<bf16>>
+  %p2 = tensor.pad %x2 low[0, 0] high[0, 16] {
+  ^bb0(%i: index, %j: index):
+    tensor.yield %z : bf16
+  } : tensor<64x16xbf16> to tensor<64x32xbf16>
+  %t0 = tensor.extract_slice %p2[0, 0] [32, 32] [1, 1] : tensor<64x32xbf16> to tensor<32x32xbf16>
+  %t1 = tensor.extract_slice %p2[32, 0] [32, 32] [1, 1] : tensor<64x32xbf16> to tensor<32x32xbf16>
+  %e = tensor.empty() : tensor<32x32xbf16>
+  %s = linalg.add ins(%p, %t0 : tensor<32x32xbf16>, tensor<32x32xbf16>) outs(%e : tensor<32x32xbf16>) -> tensor<32x32xbf16>
+  %c = tensor.extract_slice %s[0, 0] [16, 16] [1, 1] : tensor<32x32xbf16> to tensor<16x16xbf16>
+  tt.store %out, %c : tensor<16x16x!tt.ptr<bf16>>
+  tt.return
+}
+
+// -----
+
+// A padded one-tile load whose pad has no tag: the host would not know what to fill.
+tt.func @padded_load_untagged(%in: tensor<16x16x!tt.ptr<bf16>>) {
+  %z = arith.constant 0.0 : bf16
+  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
+  %x = tt.load %in : tensor<16x16x!tt.ptr<bf16>>
+  %p = tensor.pad %x low[0, 0] high[16, 16] {
+  ^bb0(%i: index, %j: index):
+    tensor.yield %z : bf16
+  } : tensor<16x16xbf16> to tensor<32x32xbf16>
+  tt.return
+}
+
+// -----
+
+// A padded load that something else also reads.
+tt.func @padded_load_also_read_whole(%in: tensor<16x16x!tt.ptr<bf16>>, %out: tensor<16x16x!tt.ptr<bf16>>) {
+  %z = arith.constant 0.0 : bf16
+  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
+  %x = tt.load %in : tensor<16x16x!tt.ptr<bf16>>
+  %p = tensor.pad %x low[0, 0] high[16, 16] {
+  ^bb0(%i: index, %j: index):
+    tensor.yield %z : bf16
+  } {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 16]>} : tensor<16x16xbf16> to tensor<32x32xbf16>
+  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
+  tt.store %out, %x : tensor<16x16x!tt.ptr<bf16>>
+  tt.return
+}
+
+// -----
+
+// A 16x16 crop that leaves a whole tile of its 64x64 source out.
+tt.func @crop_drops_tiles(%out: tensor<16x16x!tt.ptr<bf16>>, %big: tensor<64x64xbf16>) {
+  %c = tensor.extract_slice %big[0, 0] [16, 16] [1, 1] : tensor<64x64xbf16> to tensor<16x16xbf16>
+  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
+  tt.store %out, %c : tensor<16x16x!tt.ptr<bf16>>
   tt.return
 }

@@ -6,6 +6,7 @@
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "TTAtlas/AtlasTarget.h"
+#include "TTAtlas/TTAtlas.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -108,6 +109,58 @@ bool builtFromTiles(Value value) {
   }
   return value.getDefiningOp<tensor::EmptyOp>() &&
          int64_t(tiles.size()) == count;
+}
+
+// A value read only as tiles: it is one tile, or every reader is a constant
+// tile slice.
+bool readAsTiles(Value value) {
+  return isTile(value.getType()) ||
+         llvm::all_of(value.getUsers(), [](Operation *user) {
+           auto slice = dyn_cast<tensor::ExtractSliceOp>(user);
+           return slice && isTileSlice(slice);
+         });
+}
+
+// The boundary form of a load smaller than, or not whole, tiles: its one
+// reader is a tensor.pad that grows it to whole tiles (zero low padding) and
+// whose result is read as tiles. Padded to one tile, the pad carries the
+// ttatlas.pad tag; padded to several, each padded tile's slice does.
+bool isPaddedBoundaryLoad(LoadOp load) {
+  if (!load->hasOneUse())
+    return false;
+  auto pad = dyn_cast<tensor::PadOp>(*load->user_begin());
+  if (!pad || pad.getSource() != load.getResult() ||
+      !llvm::all_of(pad.getMixedLowPad(),
+                    [](OpFoldResult low) { return isZeroInteger(low); }))
+    return false;
+  auto result = cast<RankedTensorType>(pad.getType());
+  if (!llvm::all_of(result.getShape(),
+                    [](int64_t size) { return size % target::kTileSize == 0; }))
+    return false;
+  if (isTile(result) && !pad->getAttrOfType<tta::PadAttr>(tta::kPad))
+    return false;
+  return readAsTiles(pad.getResult());
+}
+
+// The boundary form of a stored tensor smaller than, or not whole, tiles: the
+// real lanes of a tensor that is one tile or built from tiles, cropped from
+// the origin with unit strides. The tensor keeps every tile the crop touches.
+bool isCroppedTiles(Value value) {
+  auto crop = value.getDefiningOp<tensor::ExtractSliceOp>();
+  if (!crop ||
+      !llvm::all_of(crop.getMixedOffsets(),
+                    [](OpFoldResult at) { return isZeroInteger(at); }) ||
+      !llvm::all_of(crop.getMixedStrides(),
+                    [](OpFoldResult stride) { return isOneInteger(stride); }))
+    return false;
+  auto source = cast<RankedTensorType>(crop.getSourceType());
+  auto result = crop.getType();
+  if (result.getRank() != source.getRank() || !result.hasStaticShape())
+    return false;
+  for (auto [kept, whole] : llvm::zip(result.getShape(), source.getShape()))
+    if (llvm::divideCeil(kept, target::kTileSize) * target::kTileSize != whole)
+      return false;
+  return isTile(source) || builtFromTiles(crop.getSource());
 }
 
 bool isFloatTensor(Type type) {
@@ -255,8 +308,19 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
   }
 
   // Pass 4: linalg works on single tiles; an MXU unit on every matmul; every
-  // fill writes a fresh tile-sized tensor.empty; a larger load is read, and a
-  // larger stored tensor written, only through constant tile slices.
+  // fill writes a fresh tile-sized tensor.empty. A tt.load or tt.store larger
+  // than a tile meets the tiles in one of these boundary forms:
+  //  - a load read only through constant 32x32 slices;
+  //  - a stored tensor built from one constant tile insert_slice per tile over
+  //    a tensor.empty;
+  //  - a load that is not whole tiles (a sub-tile load, or a 50-row one), read
+  //    only by one tensor.pad up to whole tiles whose result is a tile or is
+  //    read through tile slices: the host fills the padded DRAM slot, and the
+  //    pad carries the ttatlas.pad tag when it makes one tile;
+  //  - a stored value that is a constant slice from the origin (a crop) of a
+  //    tile, or of a tensor built from tiles, that keeps every tile it touches.
+  // Padded boundary tiles carry their own rank-2 ttatlas.pad tag (pass 4, see
+  // LegalizeShapes.td); this check does not look at the tags.
   void checkStage4(ModuleOp module) {
     module.walk([&](Operation *op) {
       if (inLinalgBody(op))
@@ -276,16 +340,14 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
             broken(op, "linalg.fill does not write a fresh tensor.empty tile");
         }
       }
-      if (auto load = dyn_cast<LoadOp>(op);
-          load && isLarge(load.getType()) &&
-          !llvm::all_of(load->getUsers(), [](Operation *user) {
-            auto slice = dyn_cast<tensor::ExtractSliceOp>(user);
-            return slice && isTileSlice(slice);
-          }))
+      if (auto load = dyn_cast<LoadOp>(op); load && isLarge(load.getType()) &&
+                                            !readAsTiles(load.getResult()) &&
+                                            !isPaddedBoundaryLoad(load))
         broken(op, "tt.load is read other than through constant tile slices");
       if (auto store = dyn_cast<StoreOp>(op);
           store && isLarge(store.getValue().getType()) &&
-          !builtFromTiles(store.getValue()))
+          !builtFromTiles(store.getValue()) &&
+          !isCroppedTiles(store.getValue()))
         broken(op, "stored tensor is not built from constant tile "
                    "insert_slices");
     });
