@@ -36,10 +36,11 @@ void populateDropPatterns(RewritePatternSet &patterns);
 LogicalResult checkConditions(Operation *op, EmitFn emit);
 
 // The element type a load or store moves in host memory: the pointee of its
-// pointer operand (one pointer or a tensor of them). The pointee can itself be
-// a pointer (tt.ptr<tt.ptr<...>>); such a load or store never gets a host
-// dtype: checkLoad accepts FP8 and BF16 only, checkStore BF16 and f32, and the
-// host dtypes are recorded only after the conversion succeeds.
+// pointer operand (one pointer or a tensor of them). Triton's type verifier
+// rejects a tensor of pointers to pointers ("pointer types must point to
+// integer or floating-point types"), so a tensor load or store always has an
+// integer or float pointee; a scalar one is rejected as a scalar load or store
+// before any host dtype is recorded.
 inline Type pointee(Value ptr) {
   return cast<PointerType>(getElementTypeOrSelf(ptr.getType()))
       .getPointeeType();
