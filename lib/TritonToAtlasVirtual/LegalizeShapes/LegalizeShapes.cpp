@@ -8,10 +8,10 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/Interfaces/TilingInterface.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/TilingInterface.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -88,9 +88,11 @@ static std::optional<int64_t> rangeAxis(Value value, unsigned rank) {
     return *prior >= axis.getInt() ? *prior + 1 : *prior;
   }
   if (name == "tt.broadcast" && definition->getNumOperands() == 1) {
-    auto sourceType = dyn_cast<RankedTensorType>(definition->getOperand(0).getType());
+    auto sourceType =
+        dyn_cast<RankedTensorType>(definition->getOperand(0).getType());
     auto resultType = dyn_cast<RankedTensorType>(value.getType());
-    if (!sourceType || !resultType || sourceType.getRank() > resultType.getRank())
+    if (!sourceType || !resultType ||
+        sourceType.getRank() > resultType.getRank())
       return std::nullopt;
     auto prior = rangeAxis(definition->getOperand(0), sourceType.getRank());
     if (!prior)
@@ -148,7 +150,8 @@ static bool collectMaskBounds(Value mask, ArrayRef<int64_t> fullShape,
   }
   Operation *definition = mask.getDefiningOp();
   if (definition && definition->getName().getStringRef() == "arith.constant") {
-    auto dense = dyn_cast_or_null<DenseElementsAttr>(definition->getAttr("value"));
+    auto dense =
+        dyn_cast_or_null<DenseElementsAttr>(definition->getAttr("value"));
     return dense && dense.isSplat() &&
            dense.getSplatValue<llvm::APInt>().isAllOnes();
   }
@@ -184,9 +187,8 @@ static std::optional<ttatlas::PadNeutral> constantNeutral(Value value) {
     return std::nullopt;
   }
   if (auto integer = dyn_cast_or_null<IntegerAttr>(attribute))
-    return integer.getInt() == 0
-               ? std::optional(ttatlas::PadNeutral::zero)
-               : std::nullopt;
+    return integer.getInt() == 0 ? std::optional(ttatlas::PadNeutral::zero)
+                                 : std::nullopt;
   if (auto floating = dyn_cast_or_null<FloatAttr>(attribute)) {
     const llvm::APFloat &number = floating.getValue();
     if (number.isZero())
@@ -215,14 +217,13 @@ static std::optional<ttatlas::PadNeutral> operationNeutral(Operation *op) {
       inferred = ttatlas::PadNeutral::zero;
     if (nestedName == "arith.maximumf" || nestedName == "arith.maxnumf" ||
         nestedName == "arith.maxsi" || nestedName == "arith.maxui")
-      inferred = reduction ? ttatlas::PadNeutral::neg_inf
-                           : ttatlas::PadNeutral::zero;
+      inferred =
+          reduction ? ttatlas::PadNeutral::neg_inf : ttatlas::PadNeutral::zero;
   });
   return inferred;
 }
 
-static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
-                                     linalg::LinalgOp op,
+static LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
                                      linalg::LinalgOp &paddedOp,
                                      SmallVectorImpl<Value> &replacements) {
   SmallVector<OpFoldResult> paddingSizes(
@@ -243,14 +244,13 @@ static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
     if (*neutral == ttatlas::PadNeutral::neg_inf) {
       auto floatType = dyn_cast<FloatType>(elementType);
       if (!floatType) {
-        ttatlas::emitUnsupported(
-            op, "negative-infinity padding requires floats");
+        ttatlas::emitUnsupported(op,
+                                 "negative-infinity padding requires floats");
         return failure();
       }
       value = FloatAttr::get(
-          floatType,
-          llvm::APFloat::getInf(floatType.getFloatSemantics(),
-                                /*Negative=*/true));
+          floatType, llvm::APFloat::getInf(floatType.getFloatSemantics(),
+                                           /*Negative=*/true));
     } else {
       value = rewriter.getZeroAttr(elementType);
     }
@@ -260,7 +260,7 @@ static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
   auto tilingOp = dyn_cast<TilingInterface>(op.getOperation());
   if (!tilingOp) {
     ttatlas::emitUnsupported(op, "linalg operation does not implement the "
-                                "MLIR TilingInterface");
+                                 "MLIR TilingInterface");
     return failure();
   }
   linalg::PadTilingInterfaceOptions options;
@@ -270,8 +270,8 @@ static LogicalResult padToAtlasTiles(IRRewriter &rewriter,
   FailureOr<linalg::PadTilingInterfaceResult> padded =
       linalg::rewriteAsPaddedOp(rewriter, tilingOp, options);
   if (failed(padded)) {
-    ttatlas::emitUnsupported(
-        op, "MLIR failed to pad linalg iteration dimensions");
+    ttatlas::emitUnsupported(op,
+                             "MLIR failed to pad linalg iteration dimensions");
     return failure();
   }
   paddedOp = cast<linalg::LinalgOp>(padded->paddedOp.getOperation());
@@ -300,7 +300,8 @@ static std::optional<ttatlas::PadNeutral> requiredNeutral(Value value,
     return std::nullopt;
   StringRef name = definition->getName().getStringRef();
   if ((name == "arith.truncf" || name == "arith.extf" ||
-       name == "tt.fp_to_fp") && definition->getNumOperands() == 1)
+       name == "tt.fp_to_fp") &&
+      definition->getNumOperands() == 1)
     return requiredNeutral(definition->getOperand(0), depth + 1);
   if (name == "tensor.extract_slice" && definition->getNumResults() == 1) {
     std::optional<ttatlas::PadNeutral> result;
@@ -333,8 +334,9 @@ static std::optional<ttatlas::PadNeutral> requiredNeutral(Value value,
   return operationNeutral(definition);
 }
 
-static LogicalResult tagMaskedBoundaries(
-    ModuleOp module, DenseMap<Operation *, Attribute> &storePadTags) {
+static LogicalResult
+tagMaskedBoundaries(ModuleOp module,
+                    DenseMap<Operation *, Attribute> &storePadTags) {
   bool failed = false;
   DenseMap<Operation *, Attribute> tags;
   module.walk([&](Operation *op) {
@@ -352,7 +354,8 @@ static LogicalResult tagMaskedBoundaries(
                                       tensor.getShape().end());
     if (!collectMaskBounds(mask, tensor.getShape(), logicalShape)) {
       ttatlas::emitUnsupported(
-          op, "edge mask is not a static make_range comparison against a constant");
+          op,
+          "edge mask is not a static make_range comparison against a constant");
       failed = true;
       return;
     }
@@ -378,7 +381,8 @@ static LogicalResult tagMaskedBoundaries(
       return;
     }
     if (isLoad) {
-      std::optional<ttatlas::PadNeutral> consumerNeutral = requiredNeutral(value);
+      std::optional<ttatlas::PadNeutral> consumerNeutral =
+          requiredNeutral(value);
       if (!consumerNeutral || *consumerNeutral != *neutral) {
         ttatlas::emitUnsupported(
             op, "masked load neutral element does not match its consumer");
@@ -388,21 +392,22 @@ static LogicalResult tagMaskedBoundaries(
     }
     Operation *taggedOp = isLoad ? op : value.getDefiningOp();
     if (!taggedOp) {
-      ttatlas::emitUnsupported(op, "padded store value has no defining operation");
+      ttatlas::emitUnsupported(op,
+                               "padded store value has no defining operation");
       failed = true;
       return;
     }
     auto pad = ttatlas::PadAttr::get(op->getContext(), *neutral, logicalShape);
     if (Attribute old = taggedOp->getAttr(ttatlas::kPad); old && old != pad) {
-      ttatlas::emitUnsupported(taggedOp,
-                               "conflicting ttatlas.pad metadata from edge masks");
+      ttatlas::emitUnsupported(
+          taggedOp, "conflicting ttatlas.pad metadata from edge masks");
       failed = true;
       return;
     }
     auto [it, inserted] = tags.try_emplace(taggedOp, pad);
     if (!inserted && it->second != pad) {
-      ttatlas::emitUnsupported(taggedOp,
-                               "conflicting ttatlas.pad metadata from edge masks");
+      ttatlas::emitUnsupported(
+          taggedOp, "conflicting ttatlas.pad metadata from edge masks");
       failed = true;
     }
   });
@@ -425,8 +430,8 @@ static LogicalResult tagMaskedBoundaries(
   return success();
 }
 
-static LogicalResult propagateStorePadTags(
-    const DenseMap<Operation *, Attribute> &storePadTags) {
+static LogicalResult
+propagateStorePadTags(const DenseMap<Operation *, Attribute> &storePadTags) {
   for (auto [store, pad] : storePadTags) {
     Value storedValue = store->getOperand(1);
     Operation *definition = storedValue.getDefiningOp();
@@ -436,8 +441,8 @@ static LogicalResult propagateStorePadTags(
       return failure();
     }
     if (Attribute old = definition->getAttr(ttatlas::kPad); old && old != pad) {
-      ttatlas::emitUnsupported(
-          definition, "conflicting ttatlas.pad metadata after tiling");
+      ttatlas::emitUnsupported(definition,
+                               "conflicting ttatlas.pad metadata after tiling");
       return failure();
     }
     definition->setAttr(ttatlas::kPad, pad);
@@ -552,10 +557,10 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       }
       bool validTensorShapes = true;
       for (Type type : llvm::concat<const Type>(op->getOperandTypes(),
-                                                 op->getResultTypes())) {
+                                                op->getResultTypes())) {
         if (isa<TensorType>(type) && !isSupportedTensor(type)) {
-          ttatlas::emitUnsupported(
-              op, "linalg tensor must have static rank 1 or 2 and positive dimensions");
+          ttatlas::emitUnsupported(op, "linalg tensor must have static rank 1 "
+                                       "or 2 and positive dimensions");
           hadFailure = true;
           validTensorShapes = false;
           break;
@@ -584,9 +589,8 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
     for (Operation *op : llvm::reverse(computeOps)) {
       if (op->getBlock() == nullptr)
         continue;
-      if (llvm::all_of(op->getResults(), [](Value result) {
-            return result.use_empty();
-          })) {
+      if (llvm::all_of(op->getResults(),
+                       [](Value result) { return result.use_empty(); })) {
         rewriter.eraseOp(op);
         continue;
       }
@@ -595,16 +599,16 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
         signalPassFailure();
         return;
       }
-      bool needsPadding = llvm::any_of(linalgOp.getStaticLoopRanges(),
-                                       [](int64_t size) {
-        return size % ttatlas::target::kTileSize != 0;
-      });
+      bool needsPadding =
+          llvm::any_of(linalgOp.getStaticLoopRanges(), [](int64_t size) {
+            return size % ttatlas::target::kTileSize != 0;
+          });
       if (needsPadding) {
         linalg::LinalgOp paddedOp;
         SmallVector<Value> replacements;
         rewriter.setInsertionPoint(op);
-        if (failed(padToAtlasTiles(rewriter, linalgOp, paddedOp,
-                                   replacements))) {
+        if (failed(
+                padToAtlasTiles(rewriter, linalgOp, paddedOp, replacements))) {
           signalPassFailure();
           return;
         }
@@ -614,10 +618,10 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       }
       SmallVector<int64_t> loopSizes(linalgOp.getNumLoops(),
                                      ttatlas::target::kTileSize);
-      bool needsTiling = llvm::any_of(linalgOp.getStaticLoopRanges(),
-                                      [](int64_t size) {
-                                        return size > ttatlas::target::kTileSize;
-                                      });
+      bool needsTiling =
+          llvm::any_of(linalgOp.getStaticLoopRanges(), [](int64_t size) {
+            return size > ttatlas::target::kTileSize;
+          });
       if (!needsTiling)
         continue;
 
@@ -627,17 +631,19 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       rewriter.setInsertionPoint(op);
       auto tiled = linalg::tileLinalgOp(rewriter, linalgOp, options);
       if (::mlir::failed(tiled)) {
-        ttatlas::emitUnsupported(op, "MLIR failed to tile the linalg operation");
+        ttatlas::emitUnsupported(op,
+                                 "MLIR failed to tile the linalg operation");
         hadFailure = true;
         continue;
       }
       if (tiled->tensorResults.size() != op->getNumResults()) {
-        ttatlas::emitUnsupported(op, "MLIR tiling returned an unexpected result count");
+        ttatlas::emitUnsupported(
+            op, "MLIR tiling returned an unexpected result count");
         hadFailure = true;
         continue;
       }
       ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
-                                   "tile linalg compute to 32x32");
+                                  "tile linalg compute to 32x32");
       rewriter.replaceOp(op, tiled->tensorResults);
       if (failed(fuseSlicedProducers(module))) {
         signalPassFailure();
@@ -645,7 +651,8 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       }
     }
 
-    if (failed(fuseSlicedProducers(module)) || failed(unrollTileLoops(module))) {
+    if (failed(fuseSlicedProducers(module)) ||
+        failed(unrollTileLoops(module))) {
       signalPassFailure();
       return;
     }
@@ -656,7 +663,8 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
     }
 
     module.walk([&](Operation *op) {
-      if (isLinalgCompute(op) && op->getName().getStringRef() == "linalg.matmul")
+      if (isLinalgCompute(op) &&
+          op->getName().getStringRef() == "linalg.matmul")
         hadFailure |= !setMxuZero(op);
     });
     if (hadFailure)
