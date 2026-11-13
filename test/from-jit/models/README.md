@@ -12,6 +12,7 @@ the same small hardware unit.
 | `fp8_simple_attention` | One attention layer: score, softmax, value |
 | `attention_then_mlp` | Attention followed by two MLP layers |
 | `stacked_attention` | Two attention layers in sequence |
+| `stacked_attention_then_mlp` | Two attention layers followed by two MLP layers |
 
 Run all cases with:
 
