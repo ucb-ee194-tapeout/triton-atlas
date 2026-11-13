@@ -3,10 +3,8 @@
 A Triton backend for Atlas, the NPU in the Penguin SoC. It compiles `@triton.jit` kernels to Atlas virtual IR, the
 input of [atlas-mlir](https://github.com/ucb-bar/atlas-mlir).
 
-**Status:** the pipeline runs all seven passes. Pass 4 tiles statically sized linalg operations at 32, fuses
-tile producers, fully unrolls static tile loops, recognizes supported compile-time edge masks, and tags matmuls
-for MXU0. Pass 7 retains the initial static 32×32 two-layer FP8 MLP lowering; several other passes remain
-placeholders. Launching a kernel still stops at a stub.
+**Status:** the pipeline runs all seven passes, but they are still empty placeholders: `atlas_virtual` returns TTIR
+unchanged, and launching a kernel stops at a stub.
 
 ```text
 @triton.jit kernel
