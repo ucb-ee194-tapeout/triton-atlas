@@ -125,11 +125,13 @@ static rank-1 and rank-2 tensors.
 - Mask apply: on Atlas only kernel inputs get their padded lanes filled; pass 7 drops in-kernel `tensor.pad`. So when a
   reduction reads padded lanes that may not hold its identity (they were computed, or the host fill differs), pass 4
   inserts a `linalg.mul` by a 1/0 tile (sum, matmul K) or a `linalg.add` of a 0/-inf or 0/+inf tile (max, min), marked
-  `ttatlas.mask_apply`; its constant becomes a host-filled mask slot in pass 6. It is exact while the padded lanes are
-  finite (0 * inf is NaN).
+  `ttatlas.mask_apply`, which is the only marker of a mask; its constant tile must reach the kernel as data. It is
+  exact while the padded lanes are finite (0 * inf is NaN).
 
-What later passes still need: pass 6's slot assignment must read these boundary forms (masked accesses, sub-tile
-loads and stores, mask constants), and pass 7 needs a row-min reduction for padded min reductions.
+Pass 4 states what the boundary needs, not how it is laid out: each boundary tile's logical shape and the value its
+padded lanes must hold (one value per load: its readers' shared identity, or zero when they differ, with a mask apply
+for the others), and the `ttatlas.mask_apply` constant tiles. Pass 6 decides how the host provides them; pass 7 lowers
+the mask apply and needs a row-min reduction for padded min reductions.
 
 Focused Pass 4 lit coverage is in `test/legalize-shapes/`. Run it with
 `make test T=test/legalize-shapes`; run the stage-contract fixtures separately with

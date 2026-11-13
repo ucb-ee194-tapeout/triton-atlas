@@ -32,7 +32,7 @@ inline constexpr llvm::StringLiteral kPad =
 inline constexpr llvm::StringLiteral kMaskApply =
     "ttatlas.mask_apply"; // unit, on the linalg.mul / linalg.add that pass 4
                           // puts before a reduction: its constant operand is
-                          // a host-filled mask tile (pass 4, read by 6 and 7)
+                          // a constant mask tile (pass 4, read by 6 and 7)
 inline constexpr llvm::StringLiteral kMxu =
     "ttatlas.mxu"; // i32 < target::kMxuUnits, on linalg.matmul (pass 4)
 inline constexpr llvm::StringLiteral kScale =
