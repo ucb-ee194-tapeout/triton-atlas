@@ -1,7 +1,14 @@
-// RUN: triton-atlas-opt %s --ttatlas-normalize --verify-diagnostics
+// RUN: triton-atlas-opt %s --ttatlas-normalize --verify-diagnostics | FileCheck %s
 
 // A K loop of 128 steps unrolls to 128 dots, about 128 x 23 = 2944 program words, more than the 2048 one Atlas
 // program may hold at our pin. Pass 2 still unrolls it and only warns: the real size is checked at the end.
+
+// The loop is still fully unrolled: 128 dots and no scf.for left.
+// CHECK-LABEL: tt.func @long_k
+// CHECK-NOT: scf.for
+// CHECK-COUNT-128: tt.dot
+// CHECK-NOT: scf.for
+// CHECK: tt.return
 
 // expected-warning @below {{ttatlas-normalize: unrolled to 128 dots, at least 2944 program words; Atlas runs at most 2048 words per program, so this kernel will likely fail the program-size check}}
 tt.func @long_k(%a: tensor<32x32xf8E4M3FN>, %b: tensor<32x32xf8E4M3FN>) -> tensor<32x32xf32> {

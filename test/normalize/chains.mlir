@@ -136,6 +136,21 @@ tt.func @zero_start(%a: tensor<32x32xf8E4M3FN>, %b: tensor<32x32xf8E4M3FN>) -> t
 
 // -----
 
+// The last dot of a biased chain has two users, a store and the return: both take the add, so the bias reaches
+// every use.
+// CHECK-LABEL: tt.func @bias_two_users
+// CHECK: %[[D:.*]] = tt.dot %{{.*}}, %{{.*}}, %{{.*}} :
+// CHECK-NEXT: %[[SUM:.*]] = arith.addf %[[D]], %arg2
+// CHECK: tt.store %arg3, %[[SUM]]
+// CHECK: tt.return %[[SUM]]
+tt.func @bias_two_users(%a: tensor<32x32xf8E4M3FN>, %b: tensor<32x32xf8E4M3FN>, %bias: tensor<32x32xf32>, %p: tensor<32x32x!tt.ptr<f32>>) -> tensor<32x32xf32> {
+  %d = tt.dot %a, %b, %bias : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
+  tt.store %p, %d : tensor<32x32x!tt.ptr<f32>>
+  tt.return %d : tensor<32x32xf32>
+}
+
+// -----
+
 // A constant loop that runs zero times is replaced by its initial value; no scf.for is left.
 // CHECK-LABEL: tt.func @zero_trip
 // CHECK-NOT: scf.for
