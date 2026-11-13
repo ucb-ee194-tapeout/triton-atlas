@@ -74,9 +74,9 @@ target_include_directories(
     PRIVATE ${MLIR_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS} "${TRITON_WHEEL_DIR}/include"
 )
 target_compile_options(triton-atlas-opt PRIVATE -fvisibility=hidden -fno-rtti -fno-exceptions)
-# The plugin comes right after libtriton: it now carries its own linalg, and the tool must use that copy, not link a
+# The plugin comes right after libtriton: it carries its own linalg, and the tool must use that copy, not link a
 # second one from the archives. Two copies register two linalg dialects and abort ("Trying to register different
-# dialects for the same namespace: linalg"; feasibility review, 2026-11-06).
+# dialects for the same namespace: linalg").
 target_link_libraries(
     triton-atlas-opt
     PRIVATE

@@ -9,7 +9,7 @@ def LegalizeShapes : Pass<"ttatlas-legalize-shapes", "mlir::ModuleOp"> {
     linalg.fill zero, then linalg.matmuls each taking the previous one's result; every linalg.fill writes a fresh
     tile-sized tensor.empty (upstream's fold-tensor-empty patterns turn slices of a larger empty into small ones).
     Each linalg.matmul carries ttatlas.mxu, padded values ttatlas.pad. Uses MLIR's tiling interface instead of a
-    hand-written splitter (IA-19).
+    hand-written splitter.
   }];
 
   // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.

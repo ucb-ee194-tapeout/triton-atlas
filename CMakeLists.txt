@@ -172,11 +172,10 @@ target_link_libraries(
         -Wl,--no-as-needed
         "${TRITON_LIB}"
         -Wl,--as-needed
-        # linalg (passes 3-5) isn't in libtriton, so it comes from MLIR's static libraries. Only those libtriton
-        # lacks are named here; CMake adds their dependencies after them. Coming after libtriton, they fill in only
-        # what it lacks; before it, they'd add second copies of what it exports (85 duplicate type IDs in the
-        # feasibility review's scratch plugin, 2026-11-06). A pass that uses a new dialect adds its library here if
-        # libtriton doesn't export it; --no-undefined names what's missing.
+        # MLIR libraries libtriton doesn't export (linalg, for passes 3-5). CMake adds their dependencies after
+        # them. They must come after libtriton: the linker then takes from them only what libtriton lacks, while
+        # before it they'd add second copies of MLIR code libtriton already has. Add a library here when a pass
+        # needs a dialect libtriton doesn't export; --no-undefined names what's missing.
         MLIRLinalgDialect
         MLIRLinalgTransforms
 )
