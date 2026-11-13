@@ -228,3 +228,15 @@ def copy_rows_50(X, Y):
     off = r[:, None] * 32 + c[None, :]
     mask = (r < 50)[:, None]
     tl.store(Y + off, tl.load(X + off, mask=mask, other=0.0), mask=mask)
+
+
+# A K loop whose mask subtracts the loop counter (r < K - k), the usual tail-mask form, for pass 1's subtraction
+# rule. Each step reads one contiguous 32x32 tile; with K a multiple of 32 the mask keeps every lane.
+@triton.jit
+def tail_mask_k_loop(X, Y, K: tl.constexpr):
+    r = tl.arange(0, 32)
+    acc = tl.zeros((32, 32), tl.float32)
+    for k in range(0, K, 32):
+        mask = r[None, :] < K - k
+        acc += tl.load(X + k * 32 + r[:, None] * 32 + r[None, :], mask=mask, other=0.0).to(tl.float32)
+    tl.store(Y + r[:, None] * 32 + r[None, :], acc.to(tl.bfloat16))
