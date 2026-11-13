@@ -253,6 +253,9 @@ Operation *applyMask(RewriterBase &rewriter, Location loc, Value x,
                                        ValueRange{x, constant.getResult()},
                                        ValueRange{empty})
                      .getOperation();
+  // Mark it, so passes 6 and 7 tell a mask apply from a kernel's own multiply
+  // or add by a constant: its constant operand becomes a host-filled slot.
+  apply->setAttr(ttatlas::kMaskApply, rewriter.getUnitAttr());
   result = apply->getResult(0);
   return apply;
 }

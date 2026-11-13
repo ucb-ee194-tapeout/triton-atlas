@@ -68,7 +68,7 @@ tt.func @no_other(%p: !tt.ptr<bf16>) {
 // CHECK-LABEL: tt.func @padded_lanes_change_before_sum
 // CHECK: tt.load {{.*}}ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [32, 16]>
 // CHECK: linalg.generic
-// CHECK: %[[MASKED:.*]] = linalg.mul ins(%{{.*}}, %{{.*}} : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK: %[[MASKED:.*]] = linalg.mul {ttatlas.mask_apply} ins(%{{.*}}, %{{.*}} : tensor<32x32xf32>, tensor<32x32xf32>)
 // CHECK: linalg.reduce ins(%[[MASKED]] : tensor<32x32xf32>)
 tt.func @padded_lanes_change_before_sum(%ptr: !tt.ptr<f32>) -> tensor<32xf32> {
   %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>

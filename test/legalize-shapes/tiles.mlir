@@ -171,8 +171,8 @@ tt.func @bias_row_16(%in: !tt.ptr<bf16>, %out: !tt.ptr<bf16>) {
 // CHECK-DAG: %[[REAL:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf32>
 // CHECK-DAG: %[[EDGE:.*]] = arith.constant dense<"{{.*}}"> : tensor<32x32xf32>
 // CHECK: math.exp
-// CHECK: linalg.mul ins(%{{.*}}, %[[REAL]] : tensor<32x32xf32>, tensor<32x32xf32>)
-// CHECK: linalg.mul ins(%{{.*}}, %[[EDGE]] : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK: linalg.mul {ttatlas.mask_apply} ins(%{{.*}}, %[[REAL]] : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK: linalg.mul {ttatlas.mask_apply} ins(%{{.*}}, %[[EDGE]] : tensor<32x32xf32>, tensor<32x32xf32>)
 // CHECK-NOT: linalg.mul
 func.func @exp_then_row_sum_40(%x: tensor<32x40xf32>) -> tensor<32xf32> {
   %e = tensor.empty() : tensor<32x40xf32>
