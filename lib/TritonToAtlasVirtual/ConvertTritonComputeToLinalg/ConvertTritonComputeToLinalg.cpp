@@ -132,7 +132,7 @@ struct FpToFpToArith : OpConversionPattern<FpToFpOp> {
     // The first multi-layer MLP policy uses unit scale when it feeds one
     // layer's BF16 result into the next layer's FP8 MXU input.  Pass 7 reads
     // this tag and emits Atlas's virtual_pack_fp8 operation.
-    if (from.isBF16() && isa<Float8E4M3FNType>(to) &&
+    if ((from.isBF16() || from.isF32()) && isa<Float8E4M3FNType>(to) &&
         !cast->hasAttr(tta::kScale))
       cast->setAttr(tta::kScale, rewriter.getI32IntegerAttr(127));
     rewriter.replaceOp(op, cast->getResults());
