@@ -57,3 +57,64 @@ tt.func @no_other(%p: !tt.ptr<bf16>) {
   %x = tt.load %a, %m : tensor<32x!tt.ptr<bf16>>
   tt.return
 }
+
+// -----
+
+// A masked load whose padded lanes change before they are reduced: other = 0 matches the add's neutral, but x + 1.0
+// turns each padded lane into 1, and the row sum then counts them. Pass 4 must reject this (or re-mask before the sum),
+// not tag the load as padded with zero.
+#id = affine_map<(d0, d1) -> (d0, d1)>
+tt.func @padded_lanes_change_before_sum(%ptr: !tt.ptr<f32>) -> tensor<32xf32> {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  %limit = arith.constant 16 : i32
+  %limits = tt.splat %limit : i32 -> tensor<32xi32>
+  %cmp = arith.cmpi slt, %range, %limits : tensor<32xi32>
+  %col_mask = tt.expand_dims %cmp {axis = 0 : i32} : tensor<32xi1> -> tensor<1x32xi1>
+  %mask = tt.broadcast %col_mask : tensor<1x32xi1> -> tensor<32x32xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+  // expected-error @below {{masked load}}
+  %x = tt.load %ptrs, %mask, %zero : tensor<32x32x!tt.ptr<f32>>
+  %one = arith.constant 1.0 : f32
+  %e = tensor.empty() : tensor<32x32xf32>
+  %plus = linalg.generic {indexing_maps = [#id, #id], iterator_types = ["parallel", "parallel"]}
+      ins(%x : tensor<32x32xf32>) outs(%e : tensor<32x32xf32>) {
+  ^bb0(%in: f32, %out: f32):
+    %s = arith.addf %in, %one : f32
+    linalg.yield %s : f32
+  } -> tensor<32x32xf32>
+  %z = arith.constant 0.0 : f32
+  %e1 = tensor.empty() : tensor<32xf32>
+  %init = linalg.fill ins(%z : f32) outs(%e1 : tensor<32xf32>) -> tensor<32xf32>
+  %sum = linalg.reduce ins(%plus : tensor<32x32xf32>) outs(%init : tensor<32xf32>) dimensions = [1]
+  (%a: f32, %b: f32) {
+    %t = arith.addf %a, %b : f32
+    linalg.yield %t : f32
+  }
+  tt.return %sum : tensor<32xf32>
+}
+
+// -----
+
+// A column tail mask, (c < 16)[None, :]: the padding is in dimension 1, so the logical shape is 32x16. (@triton_bound
+// masks rows; the mask's dimension comes from its expand_dims, not from the make_range.)
+// CHECK-LABEL: tt.func @column_mask
+// CHECK: tt.load {{.*}}ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [32, 16]>
+tt.func @column_mask(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  %limit = arith.constant 16 : i32
+  %limits = tt.splat %limit : i32 -> tensor<32xi32>
+  %cmp = arith.cmpi slt, %range, %limits : tensor<32xi32>
+  %col_mask = tt.expand_dims %cmp {axis = 0 : i32} : tensor<32xi1> -> tensor<1x32xi1>
+  %mask = tt.broadcast %col_mask : tensor<1x32xi1> -> tensor<32x32xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+  %a = tt.load %ptrs, %mask, %zero : tensor<32x32x!tt.ptr<f32>>
+  %b = tt.load %ptrs : tensor<32x32x!tt.ptr<f32>>
+  %empty = tensor.empty() : tensor<32x32xf32>
+  %scalar_zero = arith.constant 0.0 : f32
+  %acc = linalg.fill ins(%scalar_zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %result = linalg.matmul ins(%a, %b : tensor<32x32xf32>, tensor<32x32xf32>)
+                          outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  tt.return
+}
