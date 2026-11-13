@@ -49,25 +49,23 @@ def row(name, fn, signature, passes_ok=LAST, first_error=None, constexprs=None, 
 
 # passes_ok: the last stage the kernel passes (0 = not even stage 1). first_error: a regex the next stage's first
 # "error:" line must match; required when passes_ok < LAST.
-# Pass 2 is still a placeholder: a dot whose accumulator is a bias or another dot, or that sits in a K loop,
-# has no ttatlas.k_chain tag, and stage 2 stops it. Pass 3 is too: stage 3 stops the float compute left.
-PASS_2_PLACEHOLDER = r"contract of pass 2 broken: tt\.dot accumulator is neither zero nor the previous step"
+# Pass 3 is still a placeholder: stage 3 stops the float compute left.
 PASS_3_PLACEHOLDER = r"contract of pass 3 broken: TTIR compute is left"
 
 ROWS = [
-    row("mlp", kernels.mlp, {"X": FP8, "W": FP8, "B": BF16, "Y": BF16}, passes_ok=1, first_error=PASS_2_PLACEHOLDER,
+    row("mlp", kernels.mlp, {"X": FP8, "W": FP8, "B": BF16, "Y": BF16}, passes_ok=2, first_error=PASS_3_PLACEHOLDER,
         end_to_end=True),
     row("matmul_relu", kernels.matmul_relu, {"A": FP8, "B": FP8, "C": FP32}, passes_ok=2,
         first_error=PASS_3_PLACEHOLDER, end_to_end=True),
-    row("mm32", kernels.mm32, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"}, constexprs={"K": 128}, passes_ok=1,
-        first_error=PASS_2_PLACEHOLDER, end_to_end=True),
+    row("mm32", kernels.mm32, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"}, constexprs={"K": 128}, passes_ok=2,
+        first_error=PASS_3_PLACEHOLDER, end_to_end=True),
     row("bias_seeded_k_loop", kernels.bias_seeded_k_loop,
-        {"A": FP8, "Bm": FP8, "Bias": BF16, "C": BF16, "K": "constexpr"}, constexprs={"K": 128}, passes_ok=1,
-        first_error=PASS_2_PLACEHOLDER),
+        {"A": FP8, "Bm": FP8, "Bias": BF16, "C": BF16, "K": "constexpr"}, constexprs={"K": 128}, passes_ok=2,
+        first_error=PASS_3_PLACEHOLDER),
     row("unrolled_by_triton", kernels.unrolled_by_triton, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"},
-        constexprs={"K": 128}, passes_ok=1, first_error=PASS_2_PLACEHOLDER),
-    row("dot_plus_dot", kernels.dot_plus_dot, {"A": FP8, "Bm": FP8, "C": BF16}, passes_ok=1,
-        first_error=PASS_2_PLACEHOLDER),
+        constexprs={"K": 128}, passes_ok=2, first_error=PASS_3_PLACEHOLDER),
+    row("dot_plus_dot", kernels.dot_plus_dot, {"A": FP8, "Bm": FP8, "C": BF16}, passes_ok=2,
+        first_error=PASS_3_PLACEHOLDER),
     row("row_reduce", kernels.row_reduce, {"X": BF16, "Y": BF16}, passes_ok=2, first_error=PASS_3_PLACEHOLDER),
     # Pass 1 rejects packing BF16 back to FP8 in the kernel: no FP8 scale-code rule yet.
     row("fp8_two_layer", kernels.fp8_two_layer, {"X": FP8, "W0": FP8, "W1": FP8, "Out": BF16}, passes_ok=0,
