@@ -30,6 +30,9 @@ void populateBoundaryPatterns(TypeConverter &typeConverter,
 // op, TTIR compute, float arith or math)? Then the boundary conversion leaves
 // the whole function as it is: it would clone that compute into an Atlas
 // function nothing can finish.
+// Drops the linalg.transpose of each weight_fp8_nk tile before the conversion
+// (Dot.cpp).
+void eraseNKTransposes(ModuleOp module);
 bool hasUnloweredCompute(Operation *function);
 // After the conversion: the DRAM bases and ttatlas.kernel on the function
 // (KernelMetadata.cpp).

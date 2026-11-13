@@ -178,6 +178,7 @@ target_link_libraries(
         # needs a dialect libtriton doesn't export; --no-undefined names what's missing.
         MLIRLinalgDialect
         MLIRLinalgTransforms
+        MLIRTensorTilingInterfaceImpl
 )
 
 # clangd finds compile_commands.json at the repo root with no settings. Triton's setup.py links it the same way.

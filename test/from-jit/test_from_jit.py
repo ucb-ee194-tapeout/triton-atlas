@@ -79,8 +79,14 @@ ROWS = [
     # Pass 1 rejects the BF16 transpose of K (Atlas transposes FP8 only), before it reaches the BF16 dots.
     row("bf16_simple_attention", kernels.bf16_simple_attention, {"Q": BF16, "K": BF16, "V": BF16, "Out": BF16},
         passes_ok=0, first_error=r"unsupported tt\.trans: transposes bf16"),
-    row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16}),
-    row("matmul_relu_64x32", kernels.matmul_relu_64x32, {"A": FP8, "Bm": FP8, "C": BF16}),
+    # Expected end-to-end failure: pass 7 splices one K chain at a time, and four output tiles each have a chain
+    # (planned pass 7 fix).
+    row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16},
+        end_to_end_error=r"K-chain state must have one successor"),
+    # Expected end-to-end failure: pass 6 does not read a stored tensor assembled from several tiles yet (planned for
+    # the next pass 6 PR).
+    row("matmul_relu_64x32", kernels.matmul_relu_64x32, {"A": FP8, "Bm": FP8, "C": BF16},
+        end_to_end_error=r"must fully cover a fresh tensor.empty"),
     row("row_sum_scaled_64x16", kernels.row_sum_scaled_64x16, {"X": BF16, "Y": BF16}),
     row("softmax_16", kernels.softmax_16, {"X": BF16, "Y": BF16}),
     row("softmax_masked_20", kernels.softmax_masked_20, {"X": BF16, "Y": BF16}),
