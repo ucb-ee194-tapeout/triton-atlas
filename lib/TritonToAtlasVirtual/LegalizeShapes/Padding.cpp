@@ -223,7 +223,21 @@ LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
   }
   paddedOp = cast<linalg::LinalgOp>(padded->paddedOp.getOperation());
   replacements.assign(padded->replacements);
-  SmallVector<tensor::PadOp> padOps = padded->padOps;
+  SmallVector<tensor::PadOp> padOps;
+  for (tensor::PadOp padOp : padded->padOps) {
+    // Padding an uninitialized output (a tensor.empty) only makes a bigger
+    // uninitialized tensor: write that directly, so a stored result stays
+    // built from tiles over a fresh tensor.empty, as the stage-4 contract
+    // asks.
+    if (padOp.getSource().getDefiningOp<tensor::EmptyOp>()) {
+      rewriter.setInsertionPoint(padOp);
+      RankedTensorType type = padOp.getResultType();
+      rewriter.replaceOpWithNewOp<tensor::EmptyOp>(padOp, type.getShape(),
+                                                   type.getElementType());
+      continue;
+    }
+    padOps.push_back(padOp);
+  }
   for (tensor::PadOp padOp : padOps) {
     auto sourceType = dyn_cast<RankedTensorType>(padOp.getSource().getType());
     if (!sourceType)

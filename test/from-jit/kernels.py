@@ -168,3 +168,13 @@ def add_rows_50(X, Y):
     mask = (r < 50)[:, None]
     x = tl.load(X + off, mask=mask, other=0.0).to(tl.float32)
     tl.store(Y + off, (x + x).to(tl.bfloat16), mask=mask)
+
+
+# A 64x16 BF16 add: two row tiles, each padded from 16 to 32 columns, stored as a ragged tensor.
+@triton.jit
+def add_64x16(X, Y):
+    r = tl.arange(0, 64)
+    c = tl.arange(0, 16)
+    off = r[:, None] * 16 + c[None, :]
+    x = tl.load(X + off).to(tl.float32)
+    tl.store(Y + off, (x + x).to(tl.bfloat16))

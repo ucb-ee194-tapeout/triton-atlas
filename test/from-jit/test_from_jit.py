@@ -75,6 +75,7 @@ ROWS = [
     row("row_max_64", kernels.row_max_64, {"X": BF16, "Y": BF16}),
     row("add_16", kernels.add_16, {"X": BF16, "Y": BF16}),
     row("add_rows_50", kernels.add_rows_50, {"X": BF16, "Y": BF16}),
+    row("add_64x16", kernels.add_64x16, {"X": BF16, "Y": BF16}),
 ]
 
 
