@@ -140,6 +140,27 @@ def bf16_simple_attention(Q, K, V, Out):
     tl.store(Out + r * 32 + c, result)
 
 
+# One FP8 attention tile. The score softmax stays in BF16, then its
+# probability tile is packed for the value matmul.
+@triton.jit
+def fp8_simple_attention(Q, K, V, Out):
+    r = tl.arange(0, 32)[:, None]
+    c = tl.arange(0, 32)[None, :]
+    q = tl.load(Q + r * 32 + c)
+    k = tl.load(K + r * 32 + c)
+    v = tl.load(V + r * 32 + c)
+    scores = tl.dot(q, tl.trans(k), input_precision='ieee').to(tl.bfloat16)
+    maximum = tl.max(scores.to(tl.float32), 1).to(tl.bfloat16)
+    shifted = (scores - maximum[:, None]).to(tl.bfloat16)
+    exponential = tl.exp(shifted.to(tl.float32)).to(tl.bfloat16)
+    denominator = tl.sum(exponential.to(tl.float32), 1).to(tl.bfloat16)
+    reciprocal = 1.0 / denominator
+    probability = (exponential * reciprocal[:, None]).to(tl.bfloat16)
+    packed = probability.to(tl.float8e4nv, fp_downcast_rounding='rtne')
+    result = tl.dot(packed, v, input_precision='ieee').to(tl.bfloat16)
+    tl.store(Out + r * 32 + c, result)
+
+
 # Ours: kernels bigger or smaller than one 32x32 tile, for pass 4 (shape legalization).
 # One 64x64x64 dot: 2x2 output tiles, each a K chain of 2.
 @triton.jit

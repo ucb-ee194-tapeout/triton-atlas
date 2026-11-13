@@ -6,6 +6,7 @@
 #include "TTAtlas/TTAtlas.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -39,6 +40,19 @@ static bool isZeroConstant(Value value) {
     return floating.getValue().isZero();
   if (auto dense = dyn_cast_or_null<DenseElementsAttr>(attribute))
     return dense.isSplat() && dense.getSplatValue<llvm::APFloat>().isZero();
+  return false;
+}
+
+static bool isOneConstant(Value value) {
+  Operation *definition = value.getDefiningOp();
+  if (!definition || definition->getName().getStringRef() != "arith.constant")
+    return false;
+  Attribute attribute = definition->getAttr("value");
+  if (auto floating = dyn_cast_or_null<FloatAttr>(attribute))
+    return floating.getValue().isExactlyValue(1.0);
+  if (auto dense = dyn_cast_or_null<DenseElementsAttr>(attribute))
+    return dense.isSplat() &&
+           dense.getSplatValue<llvm::APFloat>().isExactlyValue(1.0);
   return false;
 }
 
@@ -235,6 +249,9 @@ struct ConvertGeneric : ConversionPattern {
       return failure();
 
     unsigned inputCount = op->getNumOperands() - op->getNumResults();
+    SmallVector<Value> inputs;
+    for (unsigned index = 0; index < inputCount; ++index)
+      inputs.push_back(operands[index]);
 
     // A dtype conversion between tile values (pass 5's readout marker, a
     // widening or narrowing cast): every tile is BF16 on the VPU, so it keeps
@@ -275,11 +292,45 @@ struct ConvertGeneric : ConversionPattern {
         rewriter.eraseOp(empty);
       return success();
     }
+
+    auto replaceUnary = [&](Value source, StringRef kind) -> LogicalResult {
+      Operation *empty = genericDestinationToErase(
+          op, op->getOperand(op->getNumOperands() - 1));
+      Operation *unary = createAtlasOp(
+          rewriter, op->getLoc(), atlas::VirtualVPUUnaryOp::getOperationName(),
+          ValueRange{source}, atlas::VirtualBF16Type::get(op->getContext()),
+          rewriter.getNamedAttr("kind", rewriter.getStringAttr(kind)));
+      rewriter.replaceOp(op, unary->getResults());
+      if (empty)
+        rewriter.eraseOp(empty);
+      return success();
+    };
+
+    // Softmax uses exp and 1 / row_sum. They become the corresponding VPU
+    // lookup-table operations, one tile operation each.
+    if (isa<math::ExpOp, math::Exp2Op>(compute)) {
+      auto input = dyn_cast<BlockArgument>(compute->getOperand(0));
+      if (compute->getNumOperands() != 1 || !input ||
+          input.getArgNumber() >= inputCount)
+        return failure();
+      return replaceUnary(inputs[input.getArgNumber()],
+                          isa<math::ExpOp>(compute) ? "exp" : "exp2");
+    }
+    if (auto div = dyn_cast<arith::DivFOp>(compute)) {
+      Value numerator = div.getLhs();
+      bool numeratorIsOne = isOneConstant(numerator);
+      if (auto argument = dyn_cast<BlockArgument>(numerator);
+          argument && argument.getArgNumber() < inputCount)
+        numeratorIsOne |= isOneConstant(op->getOperand(argument.getArgNumber()));
+      auto denominator = dyn_cast<BlockArgument>(div.getRhs());
+      if (!numeratorIsOne || !denominator ||
+          denominator.getArgNumber() >= inputCount)
+        return ttatlas::emitUnsupported(
+            op, "VPU reciprocal lowers only the pointwise form 1 / x");
+      return replaceUnary(inputs[denominator.getArgNumber()], "recip");
+    }
     if (compute->getNumOperands() != 2)
       return failure();
-    SmallVector<Value> inputs;
-    for (unsigned index = 0; index < inputCount; ++index)
-      inputs.push_back(operands[index]);
 
     Type outputType = atlas::VirtualBF16Type::get(op->getContext());
     if (compute->getName().getStringRef() == "arith.maxnumf") {

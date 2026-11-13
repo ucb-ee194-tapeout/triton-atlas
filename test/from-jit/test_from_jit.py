@@ -82,6 +82,8 @@ ROWS = [
     # Pass 1 rejects the BF16 transpose of K (Atlas transposes FP8 only), before it reaches the BF16 dots.
     row("bf16_simple_attention", kernels.bf16_simple_attention, {"Q": BF16, "K": BF16, "V": BF16, "Out": BF16},
         passes_ok=0, first_error=r"unsupported tt\.trans: transposes bf16"),
+    row("fp8_simple_attention", kernels.fp8_simple_attention,
+        {"Q": FP8, "K": FP8, "V": FP8, "Out": BF16}, end_to_end=True),
     # Expected end-to-end failure: pass 7 splices one K chain at a time, and four output tiles each have a chain
     # (planned pass 7 fix).
     row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16},
