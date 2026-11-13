@@ -152,6 +152,17 @@ def row_sum_scaled_64x16(X, Y):
     tl.store(Y + m, (tl.sum(x, axis=1) * 2.0).to(tl.bfloat16))
 
 
+# A softmax over the rows of a 16x16 tile: one load read by a row max, the subtraction and (through exp) a row sum; the division is a reciprocal, which
+# is all pass 1 accepts.
+# The load is padded to 32x32 once, with one fill, and each reduction masks the lanes that fill does not suit.
+@triton.jit
+def softmax_16(X, Y):
+    r = tl.arange(0, 16)
+    x = tl.load(X + r[:, None] * 16 + r[None, :]).to(tl.float32)
+    e = tl.exp(x - tl.max(x, axis=1)[:, None])
+    tl.store(Y + r[:, None] * 16 + r[None, :], (e * (1.0 / tl.sum(e, axis=1))[:, None]).to(tl.bfloat16))
+
+
 # A row max of a 64x64 tile: 2 row tiles, each reducing 2 column tiles.
 @triton.jit
 def row_max_64(X, Y):

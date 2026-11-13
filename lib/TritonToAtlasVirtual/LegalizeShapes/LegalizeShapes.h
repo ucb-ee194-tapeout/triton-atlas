@@ -46,12 +46,21 @@ std::optional<ttatlas::PadNeutral> operationNeutral(Operation *op,
                                                     ArrayRef<bool> padded = {},
                                                     std::string *why = nullptr);
 
-// MaskApply.cpp: what the host should put in the padded lanes of a masked load
-// (`bounds` are its real lanes): the identity of the first reduction that
-// reads those lanes through ops that keep them (conversions, slices, pads), or
-// nothing when no reduction does.
+// MaskApply.cpp: what the host should put in the padded lanes of a load
+// (`padded[d]`: dimension d has padded lanes). One fill per load: the identity
+// of the reductions that read those lanes through ops that keep them
+// (conversions, slices, pads) when they all agree and nothing else reads the
+// load; zero when they differ or another op reads it (zero is finite, so a
+// mask apply after it is exact); nothing when no reduction reads them.
 std::optional<ttatlas::PadNeutral> hostFill(Value loaded,
-                                            ArrayRef<int64_t> bounds);
+                                            ArrayRef<bool> padded);
+
+// MaskApply.cpp: the fill of every load that has padded lanes: a masked
+// load's is its mask box's, any other load with a dimension that is not whole
+// tiles gets hostFill (or zero). padToAtlasTiles pads every operand that is a
+// load with it, so all pads of one load carry the same tag.
+using LoadFills = DenseMap<Operation *, ttatlas::PadNeutral>;
+void readLoadFills(ModuleOp module, const MaskBoxes &boxes, LoadFills &fills);
 
 // MaskApply.cpp: before the reduction `op` (whole tiles, or already padded to
 // them), puts a mask apply on every input whose padded lanes along a reduced
@@ -72,6 +81,7 @@ LogicalResult tileBareCopies(ModuleOp module);
 
 // Padding.cpp: pads `op` up to whole Atlas tiles with its neutral element.
 LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
+                              const LoadFills &fills,
                               linalg::LinalgOp &paddedOp,
                               SmallVectorImpl<Value> &replacements);
 

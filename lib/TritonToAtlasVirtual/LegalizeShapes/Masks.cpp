@@ -76,7 +76,10 @@ LogicalResult readMaskedBoundaries(ModuleOp module, MaskBoxes &boxes) {
         failed = true;
         return;
       }
-      if (std::optional<ttatlas::PadNeutral> fill = hostFill(value, *bounds))
+      SmallVector<bool> padded;
+      for (auto [bound, size] : llvm::zip_equal(*bounds, tensor.getShape()))
+        padded.push_back(bound < size);
+      if (std::optional<ttatlas::PadNeutral> fill = hostFill(value, padded))
         neutral = *fill;
       else if (std::optional<ttatlas::PadNeutral> other =
                    constantNeutral(load.getOther()))

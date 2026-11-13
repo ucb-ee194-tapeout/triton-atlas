@@ -121,25 +121,39 @@ bool readAsTiles(Value value) {
          });
 }
 
-// The boundary form of a load smaller than, or not whole, tiles: its one
-// reader is a tensor.pad that grows it to whole tiles (zero low padding) and
-// whose result is read as tiles. Padded to one tile, the pad carries the
-// ttatlas.pad tag; padded to several, each padded tile's slice does.
+// The boundary form of a load smaller than, or not whole, tiles: every reader
+// is a tensor.pad that grows it to whole tiles (zero low padding) and whose
+// result is read as tiles; the pads are one per reading op until CSE merges
+// them, and they all carry the same fill, since the host fills a load once.
+// Padded to one tile, the pad carries the ttatlas.pad tag; padded to several,
+// each padded tile's slice does.
 bool isPaddedBoundaryLoad(LoadOp load) {
-  if (!load->hasOneUse())
+  if (load->use_empty())
     return false;
-  auto pad = dyn_cast<tensor::PadOp>(*load->user_begin());
-  if (!pad || pad.getSource() != load.getResult() ||
-      !llvm::all_of(pad.getMixedLowPad(),
-                    [](OpFoldResult low) { return isZeroInteger(low); }))
-    return false;
-  auto result = cast<RankedTensorType>(pad.getType());
-  if (!llvm::all_of(result.getShape(),
-                    [](int64_t size) { return size % target::kTileSize == 0; }))
-    return false;
-  if (isTile(result) && !pad->getAttrOfType<tta::PadAttr>(tta::kPad))
-    return false;
-  return readAsTiles(pad.getResult());
+  tta::PadAttr fill;
+  for (Operation *user : load->getUsers()) {
+    auto pad = dyn_cast<tensor::PadOp>(user);
+    if (!pad || pad.getSource() != load.getResult() ||
+        !llvm::all_of(pad.getMixedLowPad(),
+                      [](OpFoldResult low) { return isZeroInteger(low); }))
+      return false;
+    auto result = cast<RankedTensorType>(pad.getType());
+    if (!llvm::all_of(result.getShape(), [](int64_t size) {
+          return size % target::kTileSize == 0;
+        }))
+      return false;
+    auto tag = pad->getAttrOfType<tta::PadAttr>(tta::kPad);
+    if (isTile(result) && !tag)
+      return false;
+    if (tag) {
+      if (fill && fill.getNeutral() != tag.getNeutral())
+        return false;
+      fill = tag;
+    }
+    if (!readAsTiles(pad.getResult()))
+      return false;
+  }
+  return true;
 }
 
 // The boundary form of a stored tensor smaller than, or not whole, tiles: the
@@ -314,9 +328,9 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
   //  - a stored tensor built from one constant tile insert_slice per tile over
   //    a tensor.empty;
   //  - a load that is not whole tiles (a sub-tile load, or a 50-row one), read
-  //    only by one tensor.pad up to whole tiles whose result is a tile or is
-  //    read through tile slices: the host fills the padded DRAM slot, and the
-  //    pad carries the ttatlas.pad tag when it makes one tile;
+  //    only by tensor.pads up to whole tiles (one fill for all of them) whose
+  //    result is a tile or is read through tile slices: the pad carries the
+  //    ttatlas.pad tag when it makes one tile;
   //  - a stored value that is a constant slice from the origin (a crop) of a
   //    tile, or of a tensor built from tiles, that keeps every tile it touches.
   // Padded boundary tiles carry their own rank-2 ttatlas.pad tag (pass 4, see

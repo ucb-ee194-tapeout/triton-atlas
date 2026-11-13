@@ -94,26 +94,36 @@ bool hasReduction(linalg::LinalgOp op) {
                             utils::IteratorType::reduction);
 }
 
+// The identities of the reductions that read `value`'s padded lanes along a
+// reduced loop, through ops that keep the lanes (`needs`); `other` is set when
+// some reader may see them otherwise (an elementwise op, a store, a reduction
+// of another dimension, an identity the host cannot fill).
 void collectNeeds(Value value, ArrayRef<bool> padded,
-                  SmallVectorImpl<PadNeutral> &needs, unsigned depth) {
-  if (depth > 16)
+                  SmallVectorImpl<PadNeutral> &needs, bool &other,
+                  unsigned depth) {
+  if (depth > 16) {
+    other = true;
     return;
+  }
   for (OpOperand &use : value.getUses()) {
     if (Value next = passedThrough(use)) {
-      collectNeeds(next, padded, needs, depth + 1);
+      collectNeeds(next, padded, needs, other, depth + 1);
       continue;
     }
     auto reader = dyn_cast<linalg::LinalgOp>(use.getOwner());
-    if (!reader || !hasReduction(reader) || !reader.isDpsInput(&use))
-      continue;
     bool reads = false;
-    for (auto [d, isPadded] : llvm::enumerate(padded))
-      reads |= isPadded && readsAlongReduction(reader, use, d);
-    if (!reads)
+    if (reader && hasReduction(reader) && reader.isDpsInput(&use))
+      for (auto [d, isPadded] : llvm::enumerate(padded))
+        reads |= isPadded && readsAlongReduction(reader, use, d);
+    std::optional<PadNeutral> identity;
+    if (reads)
+      identity = operationNeutral(reader);
+    if (!identity) {
+      other = true;
       continue;
-    if (std::optional<PadNeutral> identity = operationNeutral(reader))
-      if (!llvm::is_contained(needs, *identity))
-        needs.push_back(*identity);
+    }
+    if (!llvm::is_contained(needs, *identity))
+      needs.push_back(*identity);
   }
 }
 
@@ -321,16 +331,35 @@ Operation *applyMask(RewriterBase &rewriter, Location loc, Value x,
 
 } // namespace
 
-std::optional<PadNeutral> hostFill(Value loaded, ArrayRef<int64_t> bounds) {
-  auto type = cast<RankedTensorType>(loaded.getType());
-  SmallVector<bool> padded;
-  for (auto [bound, size] : llvm::zip_equal(bounds, type.getShape()))
-    padded.push_back(bound < size);
+std::optional<PadNeutral> hostFill(Value loaded, ArrayRef<bool> padded) {
   SmallVector<PadNeutral> needs;
-  collectNeeds(loaded, padded, needs, 0);
+  bool other = false;
+  collectNeeds(loaded, padded, needs, other, 0);
   if (needs.empty())
     return std::nullopt;
+  // One fill per load. Readers that agree on one identity share it; otherwise
+  // zero, which is finite, so a mask apply that adds -inf or +inf, or
+  // multiplies by 0, still gives the right lanes.
+  if (other || needs.size() > 1)
+    return PadNeutral::zero;
   return needs.front();
+}
+
+void readLoadFills(ModuleOp module, const MaskBoxes &boxes, LoadFills &fills) {
+  module.walk([&](LoadOp load) {
+    if (auto box = boxes.find(load); box != boxes.end()) {
+      fills[load] = box->second.neutral;
+      return;
+    }
+    auto type = dyn_cast<RankedTensorType>(load.getType());
+    if (!type || type.getRank() > 2)
+      return;
+    SmallVector<bool> padded;
+    for (int64_t size : type.getShape())
+      padded.push_back(size % ttatlas::target::kTileSize != 0);
+    if (std::optional<PadNeutral> fill = hostFill(load.getResult(), padded))
+      fills[load] = *fill;
+  });
 }
 
 LogicalResult maskPaddedReductions(RewriterBase &rewriter, linalg::LinalgOp op,

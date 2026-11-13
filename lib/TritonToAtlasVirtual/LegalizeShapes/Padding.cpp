@@ -172,6 +172,7 @@ static Attribute padValueAttr(ttatlas::PadNeutral neutral, Type type) {
 }
 
 LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
+                              const LoadFills &fills,
                               linalg::LinalgOp &paddedOp,
                               SmallVectorImpl<Value> &replacements) {
   SmallVector<OpFoldResult> paddingSizes(
@@ -192,10 +193,17 @@ LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
         op, "cannot establish a pad value for static tile padding: " + why);
     return failure();
   }
+  // A load has one fill for all its readers, whatever this op would want.
+  auto operandNeutral = [&](Value operand) {
+    if (Operation *definition = operand.getDefiningOp<LoadOp>())
+      if (auto fill = fills.find(definition); fill != fills.end())
+        return fill->second;
+    return *neutral;
+  };
   SmallVector<Attribute> paddingValues;
   for (Value operand : op->getOperands()) {
     Type elementType = getElementTypeOrSelf(operand.getType());
-    Attribute value = padValueAttr(*neutral, elementType);
+    Attribute value = padValueAttr(operandNeutral(operand), elementType);
     if (!value) {
       ttatlas::emitUnsupported(
           op, "the pad value cannot be written in this element type");
@@ -242,7 +250,8 @@ LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
     auto sourceType = dyn_cast<RankedTensorType>(padOp.getSource().getType());
     if (!sourceType)
       continue;
-    auto pad = ttatlas::PadAttr::get(rewriter.getContext(), *neutral,
+    auto pad = ttatlas::PadAttr::get(rewriter.getContext(),
+                                     operandNeutral(padOp.getSource()),
                                      rowsAndColumns(sourceType.getShape()));
     padOp->setAttr(ttatlas::kPad, pad);
   }

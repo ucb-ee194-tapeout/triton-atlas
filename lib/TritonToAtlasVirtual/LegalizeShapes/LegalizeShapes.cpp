@@ -109,6 +109,9 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       return;
     }
 
+    LoadFills loadFills;
+    readLoadFills(module, maskBoxes, loadFills);
+
     LiveOps tracker;
     IRRewriter rewriter(module.getContext(), &tracker);
     for (Operation *op : computeOps)
@@ -173,8 +176,8 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
         linalg::LinalgOp paddedOp;
         SmallVector<Value> replacements;
         rewriter.setInsertionPoint(op);
-        if (failed(
-                padToAtlasTiles(rewriter, linalgOp, paddedOp, replacements))) {
+        if (failed(padToAtlasTiles(rewriter, linalgOp, loadFills, paddedOp,
+                                   replacements))) {
           signalPassFailure();
           return;
         }

@@ -298,3 +298,45 @@ tt.func @masked_dot_then_row_max(%qp: !tt.ptr<f32>, %kp: !tt.ptr<f32>, %out: !tt
   tt.store %optrs, %max : tensor<32x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// One masked load read by a row sum and a row max (the max last): a load has one fill. The max wants -inf and the sum 0, so the host
+// fills 0 (a finite lane, which a mask apply handles exactly), the max reads an add mask, and the sum needs none. With
+// -inf, the sum's x * 0 mask would be NaN.
+// CHECK-LABEL: tt.func @sum_and_max_of_one_load
+// CHECK: tt.load {{.*}}ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [32, 16]>
+// CHECK-NOT: linalg.mul {ttatlas.mask_apply}
+// CHECK: linalg.add {ttatlas.mask_apply}
+// CHECK-NOT: linalg.mul {ttatlas.mask_apply}
+tt.func @sum_and_max_of_one_load(%ptr: !tt.ptr<f32>, %out: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  %limit = arith.constant 16 : i32
+  %limits = tt.splat %limit : i32 -> tensor<32xi32>
+  %cmp = arith.cmpi slt, %range, %limits : tensor<32xi32>
+  %col_mask = tt.expand_dims %cmp {axis = 0 : i32} : tensor<32xi1> -> tensor<1x32xi1>
+  %mask = tt.broadcast %col_mask : tensor<1x32xi1> -> tensor<32x32xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+  %x = tt.load %ptrs, %mask, %zero : tensor<32x32x!tt.ptr<f32>>
+  %ninf = arith.constant 0xFF800000 : f32
+  %z = arith.constant 0.0 : f32
+  %e2 = tensor.empty() : tensor<32xf32>
+  %sum_init = linalg.fill ins(%z : f32) outs(%e2 : tensor<32xf32>) -> tensor<32xf32>
+  %sum = linalg.reduce ins(%x : tensor<32x32xf32>) outs(%sum_init : tensor<32xf32>) dimensions = [1]
+  (%a: f32, %b: f32) {
+    %t = arith.addf %a, %b : f32
+    linalg.yield %t : f32
+  }
+  %e1 = tensor.empty() : tensor<32xf32>
+  %max_init = linalg.fill ins(%ninf : f32) outs(%e1 : tensor<32xf32>) -> tensor<32xf32>
+  %max = linalg.reduce ins(%x : tensor<32x32xf32>) outs(%max_init : tensor<32xf32>) dimensions = [1]
+  (%a: f32, %b: f32) {
+    %m = arith.maxnumf %a, %b : f32
+    linalg.yield %m : f32
+  }
+  %total = arith.addf %max, %sum : tensor<32xf32>
+  %optrs = tt.splat %out : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+  tt.store %optrs, %total : tensor<32x!tt.ptr<f32>>
+  tt.return
+}
