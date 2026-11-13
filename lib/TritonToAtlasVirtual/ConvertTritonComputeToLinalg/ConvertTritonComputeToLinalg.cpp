@@ -72,7 +72,7 @@ struct DotToMatmul : OpConversionPattern<DotOp> {
     // tt.dot's inputPrecision and maxNumImpreciseAcc are dropped: they choose
     // how a GPU multiplies f32 (tf32, imprecise accumulation), and Atlas's MXU
     // multiplies FP8 E4M3 only (pass 1), so they have no meaning here. The
-    // matmul_relu fixture carries inputPrecision = tf32, for example.
+    // matmul_relu test input carries inputPrecision = tf32, for example.
     auto matmul = linalg::MatmulOp::create(
         rewriter, loc, TypeRange{op.getType()},
         ValueRange{adaptor.getA(), adaptor.getB()}, ValueRange{init});

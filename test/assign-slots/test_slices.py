@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import unittest
 
-SOURCE = (Path(__file__).parents[1] / "fixtures/boundary-slices.ttir.mlir").read_text()
+SOURCE = (Path(__file__).parents[1] / "inputs/boundary-slices.ttir.mlir").read_text()
 
 
 class SliceContractTest(unittest.TestCase):

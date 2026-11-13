@@ -1,4 +1,4 @@
-// RUN: triton-atlas-opt %S/../fixtures/boundary-slices.ttir.mlir --ttatlas-assign-slots --ttatlas-verify-contract=stage=6 | FileCheck %s
+// RUN: triton-atlas-opt %S/../inputs/boundary-slices.ttir.mlir --ttatlas-assign-slots --ttatlas-verify-contract=stage=6 | FileCheck %s
 // CHECK-DAG: affine_map<()[s0, s1, s2, s3, s4, s5] -> (1, 0)>
 // CHECK-DAG: affine_map<()[s0, s1, s2, s3, s4, s5] -> (1, 32)>
 // CHECK: tt.load

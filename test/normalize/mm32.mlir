@@ -1,4 +1,4 @@
-// RUN: triton-atlas-opt %S/../fixtures/mm32.ttir.mlir --ttatlas-normalize --ttatlas-verify-contract=stage=2 | FileCheck %s
+// RUN: triton-atlas-opt %S/../inputs/mm32.ttir.mlir --ttatlas-normalize --ttatlas-verify-contract=stage=2 | FileCheck %s
 
 // mm32's K loop (4 trips, K = 128) is unrolled into one chain of 4 dots, each accumulating onto the previous one and
 // tagged with its place in the chain. The stage-2 contract check runs after it.

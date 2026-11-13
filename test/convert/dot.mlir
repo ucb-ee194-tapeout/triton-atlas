@@ -1,6 +1,6 @@
 // RUN: triton-atlas-opt %s --convert-triton-to-atlas-virtual --verify-atlas-virtual-stream | FileCheck %s --implicit-check-not='tt.' --implicit-check-not='linalg.' --implicit-check-not='tensor.'
 
-// Pass 3's linalg form of fixtures/matmul_relu.ttir.mlir, with Pass 6 slots
+// Pass 3's linalg form of inputs/matmul_relu.ttir.mlir, with Pass 6 slots
 // and Pass 4's MXU policy tag. Expected sequence matches the team's virtual
 // reference: inputs, optional XLU weight orientation, MXU matmul, ReLU, output.
 module {

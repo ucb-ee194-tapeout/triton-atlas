@@ -1,4 +1,4 @@
-// RUN: triton-atlas-opt %S/../fixtures/mlp.ttir.mlir --ttatlas-normalize --ttatlas-verify-contract=stage=2 | FileCheck %s
+// RUN: triton-atlas-opt %S/../inputs/mlp.ttir.mlir --ttatlas-normalize --ttatlas-verify-contract=stage=2 | FileCheck %s
 
 // Triton's combine folded the MLP's bias into the dot's accumulator. Pass 2 undoes it: the dot starts from zero and
 // the bias is added after it, before the ReLU. The stage-2 contract check runs after it.

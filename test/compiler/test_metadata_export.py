@@ -61,7 +61,7 @@ class MetadataExportTest(unittest.TestCase):
     def test_native_producer_and_determinism(self):
         command = [
             shutil.which("triton-atlas-opt"),
-            str(ROOT / "test/fixtures/boundary-slices.ttir.mlir"), "--ttatlas-assign-slots",
+            str(ROOT / "test/inputs/boundary-slices.ttir.mlir"), "--ttatlas-assign-slots",
             "--convert-triton-to-atlas-virtual", "--ttatlas-verify-contract=stage=7", "--verify-atlas-virtual-stream"
         ]
         first = subprocess.check_output(command, text=True)

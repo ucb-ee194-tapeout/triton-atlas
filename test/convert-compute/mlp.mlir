@@ -1,13 +1,13 @@
 // RUN: triton-atlas-opt %s --convert-triton-compute-to-linalg --ttatlas-verify-contract=stage=3 | FileCheck %s --check-prefix=DEFAULT
-// RUN: triton-atlas-opt %S/../fixtures/mlp.ttir.mlir --convert-triton-compute-to-linalg --ttatlas-verify-contract=stage=3 | FileCheck %s --check-prefix=FOLDED
+// RUN: triton-atlas-opt %S/../inputs/mlp.ttir.mlir --convert-triton-compute-to-linalg --ttatlas-verify-contract=stage=3 | FileCheck %s --check-prefix=FOLDED
 
 // The first version's kernel, the MLP (relu(x @ w.T + b), one 32x32 tile), through pass 3: all its compute is linalg
 // (the bias extf, the transpose, the matmul, the bias broadcast, the bias add, the ReLU and the BF16 truncf), while
 // loads, stores and address math stay TTIR.
 //
-// The DEFAULT checks: the input below is the MLP fixture as pass 2 leaves it by default (written by hand, since pass 2 lives on
+// The DEFAULT checks: the IR below is the MLP input as pass 2 leaves it by default (written by hand, since pass 2 lives on
 // another branch): the dot starts from zero and the bias is a separate add. That is what the pipeline gives pass 3.
-// The FOLDED checks: the raw fixture, where Triton's combine folded the bias into the dot's accumulator. Pass 2 keeps that form
+// The FOLDED checks: the raw input, where Triton's combine folded the bias into the dot's accumulator. Pass 2 keeps that form
 // only with its experimental fold-bias-into-dot option; the bias then becomes the matmul's output operand.
 
 // DEFAULT-LABEL: tt.func public @mlp_after_pass2

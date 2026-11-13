@@ -1,4 +1,4 @@
-// Fixture: Triton tutorial 03 style matmul, 64x64 blocks, runtime strides and masks, a 2-D grid. Outside the
+// Test input: Triton tutorial 03 style matmul, 64x64 blocks, runtime strides and masks, a 2-D grid. Outside the
 // accepted subset today (ttatlas-validate-ttir stops it; that lane adds the test showing it, in
 // test/validate-ttir/); kept as the target for specialization and tiling.
 // TTIR from Triton 3.9.0 (A, Bm: *fp8e4nv, C: *bf16, M N K and strides: i32, BM = BN = 64, BK = 32), debug

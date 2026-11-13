@@ -1,4 +1,4 @@
-// Fixture: one 32x32 matmul + ReLU (stage A's input). TTIR from the team's ttir2linalg repo, ecd55fd
+// Test input: one 32x32 matmul + ReLU (stage A's input). TTIR from the team's ttir2linalg repo, ecd55fd
 // matmul_relu_generated.ttir, made by its generate_matmul_relu.py; printed through triton-atlas-opt to drop
 // debug locations. Kernel:
 //   @triton.jit

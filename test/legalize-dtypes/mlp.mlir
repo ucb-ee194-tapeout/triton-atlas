@@ -1,6 +1,6 @@
 // RUN: triton-atlas-opt %s --split-input-file --ttatlas-legalize-dtypes --ttatlas-verify-contract=stage=5 | FileCheck %s
 
-// The MLP fixture (relu(x @ w.T + b), one 32x32 tile) as pass 4 leaves it, hand-written: compute in linalg, f32 after
+// The MLP input (relu(x @ w.T + b), one 32x32 tile) as pass 4 leaves it, hand-written: compute in linalg, f32 after
 // the dot. Pass 5 keeps the matmul's accumulator f32 (it stays in the MXU), adds the readout marker after it, retypes
 // the bias add and the ReLU to BF16, and erases the bias extf and the final truncf, which became BF16 -> BF16. The
 // stage-5 contract check runs after it.

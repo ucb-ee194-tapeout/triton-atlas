@@ -1,4 +1,4 @@
-// Fixture: one MLP layer, relu(x @ w.T + b), on one 32x32 tile (stage B's input). TTIR from Triton 3.9.0
+// Test input: one MLP layer, relu(x @ w.T + b), on one 32x32 tile (stage B's input). TTIR from Triton 3.9.0
 // (triton.compile of the kernel below, signature X, W: *fp8e4nv, B, Y: *bf16), debug locations dropped.
 //   @triton.jit
 //   def mlp(X, W, B, Y):

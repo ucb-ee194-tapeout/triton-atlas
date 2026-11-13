@@ -1,4 +1,4 @@
-// Fixture: a K loop on fixed 32x32 tiles with constant strides, K = 128 (stage C's first input). TTIR from
+// Test input: a K loop on fixed 32x32 tiles with constant strides, K = 128 (stage C's first input). TTIR from
 // Triton 3.9.0 (signature A, Bm: *fp8e4nv, C: *bf16, K = 128), debug locations dropped.
 //   @triton.jit
 //   def mm32(A, Bm, C, K: tl.constexpr):

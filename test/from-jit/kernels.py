@@ -3,7 +3,7 @@ import triton
 import triton.language as tl
 
 
-# The MLP fixture's kernel (test/fixtures/mlp.ttir.mlir): relu(x @ w.T + b) on one 32x32 tile.
+# The MLP input's kernel (test/inputs/mlp.ttir.mlir): relu(x @ w.T + b) on one 32x32 tile.
 @triton.jit
 def mlp(X, W, B, Y):
     r = tl.arange(0, 32)
@@ -15,7 +15,7 @@ def mlp(X, W, B, Y):
     tl.store(Y + off, tl.maximum(acc, 0.0).to(tl.bfloat16))
 
 
-# The matmul_relu fixture's kernel (test/fixtures/matmul_relu.ttir.mlir): relu(a @ b), f32 output.
+# The matmul_relu input's kernel (test/inputs/matmul_relu.ttir.mlir): relu(a @ b), f32 output.
 @triton.jit
 def matmul_relu(A, B, C):
     rows = tl.arange(0, 32)
@@ -26,7 +26,7 @@ def matmul_relu(A, B, C):
     tl.store(C + rows[:, None] * 32 + cols[None, :], result)
 
 
-# The mm32 fixture's kernel (test/fixtures/mm32.ttir.mlir): a K loop of 32x32 tiles, K = 128.
+# The mm32 input's kernel (test/inputs/mm32.ttir.mlir): a K loop of 32x32 tiles, K = 128.
 @triton.jit
 def mm32(A, Bm, C, K: tl.constexpr):
     r = tl.arange(0, 32)
