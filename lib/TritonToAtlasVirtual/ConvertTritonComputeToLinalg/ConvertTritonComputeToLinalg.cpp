@@ -380,6 +380,17 @@ void eraseDeadLeftovers(ModuleOp module) {
 LogicalResult checkCompute(ModuleOp module) {
   bool failed = false;
   module.walk([&](Operation *op) {
+    // A reduce is float compute by its operands, as pass 3's target judges
+    // it; reducing to a scalar has no linalg.reduce form here (pass 1
+    // accepts row reductions of a 2-D tile only).
+    if (auto reduce = dyn_cast<ReduceOp>(op);
+        reduce && llvm::any_of(reduce.getOperandTypes(), isFloatTensor) &&
+        !llvm::all_of(reduce->getResultTypes(), isFloatTensor)) {
+      tta::emitUnsupported(op, "reduces to a scalar; pass 3 converts row "
+                               "reductions of a tile only");
+      failed = true;
+      return;
+    }
     if (op->getName().getDialectNamespace() != "tt" ||
         !llvm::any_of(op->getResultTypes(), isFloatTensor))
       return;

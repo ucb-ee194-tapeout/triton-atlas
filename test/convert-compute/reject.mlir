@@ -36,3 +36,16 @@ tt.func @extern(%x: tensor<32x32xf32>) -> tensor<32x32xf32> {
   %r = tt.extern_elementwise %x {libname = "", libpath = "", pure = true, symbol = "__nv_expf"} : (tensor<32x32xf32>) -> tensor<32x32xf32>
   tt.return %r : tensor<32x32xf32>
 }
+
+// -----
+
+// A float reduce down to a scalar: pass 3 converts row reductions of a tile only.
+tt.func @full_reduce(%x: tensor<32xf32>) -> f32 {
+  // expected-error @below {{atlas: unsupported tt.reduce: reduces to a scalar; pass 3 converts row reductions of a tile only}}
+  %r = "tt.reduce"(%x) <{axis = 0 : i32}> ({
+  ^bb0(%a: f32, %b: f32):
+    %s = arith.addf %a, %b : f32
+    tt.reduce.return %s : f32
+  }) : (tensor<32xf32>) -> f32
+  tt.return %r : f32
+}

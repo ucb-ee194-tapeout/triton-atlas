@@ -224,8 +224,14 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
       // Only float compute must be gone: pass 3 converts float tensors only,
       // and an integer transpose, dot or reduce (address math, or rejected by
       // pass 1) stays TTIR.
-      if (isa<DotOp, TransOp, ReduceOp>(op) &&
-          llvm::any_of(op->getResultTypes(), isFloatTensor)) {
+      // A reduce counts by its operands, as pass 3's target judges it (its
+      // result can be a scalar).
+      bool leftCompute =
+          isa<ReduceOp>(op)
+              ? llvm::any_of(op->getOperandTypes(), isFloatTensor)
+              : isa<DotOp, TransOp>(op) &&
+                    llvm::any_of(op->getResultTypes(), isFloatTensor);
+      if (leftCompute) {
         broken(op,
                Twine("TTIR compute is left: ") + op->getName().getStringRef());
         return;
