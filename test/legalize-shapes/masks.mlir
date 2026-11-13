@@ -226,3 +226,75 @@ tt.func @empty_second_tile(%ptr: !tt.ptr<bf16>) {
   tt.store %ptrs, %y, %mask : tensor<64x32x!tt.ptr<bf16>>
   tt.return
 }
+
+// -----
+
+// A conversion between a 16-column load and a row max: the max's own pad tag says -inf, but the host fills the load
+// from the load's tag, and nothing promises the lanes still hold -inf after the conversion. Trusting the max's tag
+// would leave an all-negative row with a max of 0. So the max reads a mask apply (x + M, M = 0 on real lanes, -inf on
+// padded ones).
+#id = affine_map<(d0, d1) -> (d0, d1)>
+// CHECK-LABEL: tt.func @conversion_before_max
+// CHECK: %[[MASKED:.*]] = linalg.add {ttatlas.mask_apply} ins(%{{.*}}, %{{.*}} : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK: linalg.reduce ins(%[[MASKED]] : tensor<32x32xf32>)
+tt.func @conversion_before_max(%ptr: !tt.ptr<bf16>, %out: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<bf16> -> tensor<32x16x!tt.ptr<bf16>>
+  %x = tt.load %ptrs : tensor<32x16x!tt.ptr<bf16>>
+  %e = tensor.empty() : tensor<32x16xf32>
+  %wide = linalg.generic {indexing_maps = [#id, #id], iterator_types = ["parallel", "parallel"]}
+      ins(%x : tensor<32x16xbf16>) outs(%e : tensor<32x16xf32>) {
+  ^bb0(%in: bf16, %o: f32):
+    %c = arith.extf %in : bf16 to f32
+    linalg.yield %c : f32
+  } -> tensor<32x16xf32>
+  %ninf = arith.constant 0xFF800000 : f32
+  %e1 = tensor.empty() : tensor<32xf32>
+  %init = linalg.fill ins(%ninf : f32) outs(%e1 : tensor<32xf32>) -> tensor<32xf32>
+  %max = linalg.reduce ins(%wide : tensor<32x16xf32>) outs(%init : tensor<32xf32>) dimensions = [1]
+  (%a: f32, %b: f32) {
+    %m = arith.maxnumf %a, %b : f32
+    linalg.yield %m : f32
+  }
+  %optrs = tt.splat %out : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+  tt.store %optrs, %max : tensor<32x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
+// Masked key columns, scores = q @ k, then a row max (attention): the scores' padded columns come out of the matmul
+// as 0, and a 0 in an all-negative row would win the max. The valid columns are followed through the matmul (the
+// output's columns come from k's), so the max reads a mask apply that adds -inf to them.
+// CHECK-LABEL: tt.func @masked_dot_then_row_max
+// CHECK: linalg.matmul
+// CHECK: %[[MASKED:.*]] = linalg.add {ttatlas.mask_apply} ins(%{{.*}}, %{{.*}} : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK: linalg.reduce ins(%[[MASKED]] : tensor<32x32xf32>)
+tt.func @masked_dot_then_row_max(%qp: !tt.ptr<f32>, %kp: !tt.ptr<f32>, %out: !tt.ptr<f32>) {
+  %qptrs = tt.splat %qp : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
+  %kptrs = tt.splat %kp : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  %limit = arith.constant 20 : i32
+  %limits = tt.splat %limit : i32 -> tensor<32xi32>
+  %cmp = arith.cmpi slt, %range, %limits : tensor<32xi32>
+  %col_mask = tt.expand_dims %cmp {axis = 0 : i32} : tensor<32xi1> -> tensor<1x32xi1>
+  %mask = tt.broadcast %col_mask : tensor<1x32xi1> -> tensor<32x32xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+  %q = tt.load %qptrs : tensor<32x32x!tt.ptr<f32>>
+  %k = tt.load %kptrs, %mask, %zero : tensor<32x32x!tt.ptr<f32>>
+  %e = tensor.empty() : tensor<32x32xf32>
+  %z = arith.constant 0.0 : f32
+  %acc = linalg.fill ins(%z : f32) outs(%e : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %s = linalg.matmul ins(%q, %k : tensor<32x32xf32>, tensor<32x32xf32>)
+                     outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %ninf = arith.constant 0xFF800000 : f32
+  %e1 = tensor.empty() : tensor<32xf32>
+  %init = linalg.fill ins(%ninf : f32) outs(%e1 : tensor<32xf32>) -> tensor<32xf32>
+  %max = linalg.reduce ins(%s : tensor<32x32xf32>) outs(%init : tensor<32xf32>) dimensions = [1]
+  (%a: f32, %b: f32) {
+    %m = arith.maxnumf %a, %b : f32
+    linalg.yield %m : f32
+  }
+  %optrs = tt.splat %out : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+  tt.store %optrs, %max : tensor<32x!tt.ptr<f32>>
+  tt.return
+}

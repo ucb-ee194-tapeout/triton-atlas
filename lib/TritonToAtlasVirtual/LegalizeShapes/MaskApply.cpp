@@ -11,6 +11,7 @@
 //    lanes are right whatever they hold.
 #include "LegalizeShapes.h"
 
+#include "TTAtlas/AtlasTarget.h"
 #include "TTAtlas/TTAtlas.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
@@ -118,13 +119,19 @@ void collectNeeds(Value value, ArrayRef<bool> padded,
 
 // What a value's padded lanes are known to hold, in its own coordinates: lane
 // (i, j) is real when i < valid[0] and j < valid[1]; the others are padded.
-// `holds` is what the host puts in them, when the value reaches here from a
-// load only through ops that keep that (`fromHost`); unknown otherwise.
+// `holds` is what the host put in them, when the value is a boundary load (or
+// a conversion of one, or the tagged pad of one) and nothing changed them;
+// unknown otherwise. `unsupported` says why the lanes could not be followed
+// (padded lanes reach an op this analysis does not model).
 struct Lanes {
   SmallVector<int64_t> valid;
   std::optional<PadNeutral> holds;
-  bool fromHost = false;
+  std::string unsupported;
 };
+
+bool hasPaddedLanes(const Lanes &lanes, RankedTensorType type) {
+  return !llvm::equal(lanes.valid, type.getShape());
+}
 
 Lanes lanesOf(Value value, const MaskBoxes &boxes, unsigned depth = 0) {
   auto type = cast<RankedTensorType>(value.getType());
@@ -134,15 +141,15 @@ Lanes lanesOf(Value value, const MaskBoxes &boxes, unsigned depth = 0) {
   // A tensor argument of a function is an input the host provides, like a
   // load (a kernel's own arguments are pointers; this is for tests of the
   // pass on bare functions).
-  if (!definition) {
-    lanes.fromHost = true;
+  if (!definition)
+    return lanes;
+  if (depth > 24) {
+    lanes.unsupported = "the chain of ops that carries its padded lanes is "
+                        "too long to follow";
     return lanes;
   }
-  if (depth > 24)
-    return lanes;
 
   if (isa<LoadOp>(definition)) {
-    lanes.fromHost = true;
     if (auto box = boxes.find(definition); box != boxes.end()) {
       lanes.valid.assign(box->second.bounds.begin(), box->second.bounds.end());
       lanes.holds = box->second.neutral;
@@ -155,45 +162,97 @@ Lanes lanesOf(Value value, const MaskBoxes &boxes, unsigned depth = 0) {
   if (auto pad = dyn_cast<tensor::PadOp>(definition)) {
     Lanes source = lanesOf(pad.getSource(), boxes, depth + 1);
     lanes.valid = source.valid;
-    lanes.fromHost = source.fromHost;
-    if (!source.fromHost)
-      return lanes;
-    // A load that is padded already keeps the host's fill for the new lanes
-    // too (tagging gives one fill to the whole boundary tensor).
-    auto sourceShape = cast<RankedTensorType>(pad.getSource().getType());
-    if (!llvm::equal(source.valid, sourceShape.getShape()))
-      lanes.holds = source.holds;
-    else if (auto tag = pad->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad))
-      lanes.holds = tag.getNeutral();
+    lanes.unsupported = source.unsupported;
+    // The host fills only what it is given: a pad of the boundary load itself
+    // (or of a function argument) is tagged with the fill, and that is what
+    // its lanes hold. A pad of anything computed is erased by pass 7, so its
+    // new lanes hold whatever the hardware has there.
+    Operation *sourceOp = pad.getSource().getDefiningOp();
+    if (!sourceOp || isa<LoadOp>(sourceOp)) {
+      if (auto tag = pad->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad))
+        lanes.holds = tag.getNeutral();
+      else
+        lanes.holds = source.holds;
+    }
     return lanes;
   }
 
   if (auto slice = dyn_cast<tensor::ExtractSliceOp>(definition)) {
     Lanes source = lanesOf(slice.getSource(), boxes, depth + 1);
+    lanes.unsupported = source.unsupported;
+    bool sourcePadded = hasPaddedLanes(source, slice.getSourceType());
     if (llvm::any_of(slice.getStaticOffsets(), ShapedType::isDynamic) ||
         !llvm::all_of(slice.getStaticStrides(),
-                      [](int64_t stride) { return stride == 1; }))
+                      [](int64_t stride) { return stride == 1; }) ||
+        slice.getType().getRank() != slice.getSourceType().getRank()) {
+      if (sourcePadded && lanes.unsupported.empty())
+        lanes.unsupported = "a slice with a dynamic offset, a stride or fewer "
+                            "dimensions cuts a value with padded lanes";
       return lanes;
+    }
     for (auto [d, offset] : llvm::enumerate(slice.getStaticOffsets()))
       lanes.valid[d] = std::clamp<int64_t>(source.valid[d] - offset, 0,
                                            slice.getStaticSizes()[d]);
     lanes.holds = source.holds;
-    lanes.fromHost = source.fromHost;
     return lanes;
   }
 
-  // An elementwise op may change padded lanes, but they stay where they are.
-  if (auto linalgOp = dyn_cast<linalg::LinalgOp>(definition);
-      linalgOp && !hasReduction(linalgOp) &&
-      llvm::all_of(linalgOp.getIndexingMapsArray(),
-                   [](AffineMap map) { return map.isIdentity(); })) {
-    for (Value input : linalgOp.getDpsInputs())
-      if (auto inputType = dyn_cast<RankedTensorType>(input.getType());
-          inputType && inputType.getShape() == type.getShape()) {
-        Lanes lane = lanesOf(input, boxes, depth + 1);
-        for (auto [d, valid] : llvm::enumerate(lane.valid))
-          lanes.valid[d] = std::min(lanes.valid[d], valid);
+  // A linalg op: a result dimension is real where every input dimension that
+  // the indexing maps tie to the same loop is real. A reduced loop is not in
+  // the result; its padded lanes are the mask apply's business, not the
+  // result's.
+  if (auto linalgOp = dyn_cast<linalg::LinalgOp>(definition)) {
+    SmallVector<Lanes> inputs;
+    bool padded = false;
+    for (OpOperand *input : linalgOp.getDpsInputOperands()) {
+      auto inputType = dyn_cast<RankedTensorType>(input->get().getType());
+      if (!inputType) {
+        inputs.emplace_back();
+        continue;
       }
+      inputs.push_back(lanesOf(input->get(), boxes, depth + 1));
+      if (lanes.unsupported.empty())
+        lanes.unsupported = inputs.back().unsupported;
+      padded |= hasPaddedLanes(inputs.back(), inputType);
+    }
+    OpOperand *init =
+        linalgOp.getDpsInitOperand(cast<OpResult>(value).getResultNumber());
+    AffineMap resultMap = linalgOp.getMatchingIndexingMap(init);
+    for (auto [r, expr] : llvm::enumerate(resultMap.getResults())) {
+      auto loop = dyn_cast<AffineDimExpr>(expr);
+      if (!loop) {
+        if (padded && lanes.unsupported.empty())
+          lanes.unsupported = "a result index of a linalg op that reads a "
+                              "value with padded lanes is not a plain loop";
+        continue;
+      }
+      for (auto [operand, input] :
+           llvm::zip_equal(linalgOp.getDpsInputOperands(), inputs)) {
+        if (input.valid.empty())
+          continue;
+        AffineMap map = linalgOp.getMatchingIndexingMap(operand);
+        for (auto [k, inputExpr] : llvm::enumerate(map.getResults()))
+          if (inputExpr == expr)
+            lanes.valid[r] = std::min(lanes.valid[r], input.valid[k]);
+      }
+    }
+    return lanes;
+  }
+
+  // Any other op: fine while nothing it reads has padded lanes.
+  for (Value operand : definition->getOperands()) {
+    auto operandType = dyn_cast<RankedTensorType>(operand.getType());
+    if (!operandType)
+      continue;
+    Lanes input = lanesOf(operand, boxes, depth + 1);
+    if (!input.unsupported.empty())
+      lanes.unsupported = input.unsupported;
+    else if (hasPaddedLanes(input, operandType))
+      lanes.unsupported = "its padded lanes reach an op that this pass cannot "
+                          "follow lane by lane (" +
+                          definition->getName().getStringRef().str() + ")";
+    if (!lanes.unsupported.empty())
+      break;
   }
   return lanes;
 }
@@ -253,8 +312,8 @@ Operation *applyMask(RewriterBase &rewriter, Location loc, Value x,
                                        ValueRange{x, constant.getResult()},
                                        ValueRange{empty})
                      .getOperation();
-  // Mark it, so passes 6 and 7 tell a mask apply from a kernel's own multiply
-  // or add by a constant: its constant operand becomes a host-filled slot.
+  // Mark it, so later passes tell a mask apply from a kernel's own multiply
+  // or add by a constant: its constant operand is the mask tile.
   apply->setAttr(ttatlas::kMaskApply, rewriter.getUnitAttr());
   result = apply->getResult(0);
   return apply;
@@ -284,6 +343,15 @@ LogicalResult maskPaddedReductions(RewriterBase &rewriter, linalg::LinalgOp op,
     if (!type)
       continue;
     Lanes lanes = lanesOf(operand->get(), boxes);
+    bool readAlongReduction = false;
+    for (unsigned d = 0; d < type.getRank(); ++d)
+      readAlongReduction |= readsAlongReduction(op, *operand, d);
+    if (readAlongReduction && !lanes.unsupported.empty()) {
+      ttatlas::emitUnsupported(
+          op, "cannot tell which lanes of a reduction input are padded: " +
+                  lanes.unsupported);
+      return failure();
+    }
     SmallVector<bool> maskedDims;
     for (auto [d, size] : llvm::enumerate(type.getShape()))
       maskedDims.push_back(lanes.valid[d] < size &&
