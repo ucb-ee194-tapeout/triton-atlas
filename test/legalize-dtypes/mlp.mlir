@@ -9,7 +9,11 @@
 #row = affine_map<(d0) -> (d0)>
 
 // CHECK-LABEL: tt.func public @mlp
-// CHECK: %[[M:.*]] = linalg.matmul {{.*}} outs(%{{.*}} : tensor<32x32xf32>) -> tensor<32x32xf32>
+// The accumulator's zero, tensor.empty and fill stay f32.
+// CHECK: %[[Z:.*]] = arith.constant 0.000000e+00 : f32
+// CHECK: %[[E0:.*]] = tensor.empty() : tensor<32x32xf32>
+// CHECK: %[[F:.*]] = linalg.fill ins(%[[Z]] : f32) outs(%[[E0]] : tensor<32x32xf32>)
+// CHECK: %[[M:.*]] = linalg.matmul {{.*}} outs(%[[F]] : tensor<32x32xf32>) -> tensor<32x32xf32>
 // CHECK-NEXT: %[[E:.*]] = tensor.empty() : tensor<32x32xbf16>
 // CHECK-NEXT: %[[READ:.*]] = linalg.generic {{.*}} ins(%[[M]] : tensor<32x32xf32>) outs(%[[E]] : tensor<32x32xbf16>)
 // CHECK: arith.truncf %{{.*}} : f32 to bf16
