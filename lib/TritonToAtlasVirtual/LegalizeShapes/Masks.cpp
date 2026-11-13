@@ -2,6 +2,7 @@
 // ttatlas.pad tags (the neutral value of the padded lanes).
 #include "LegalizeShapes.h"
 
+#include "TritonToAtlasVirtual/LaneValues.h"
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "TTAtlas/AtlasTarget.h"
@@ -26,111 +27,6 @@
 #include <optional>
 
 namespace mlir::triton {
-
-namespace {
-
-static std::optional<int64_t> constantInteger(Value value) {
-  Operation *definition = value.getDefiningOp();
-  if (!definition)
-    return std::nullopt;
-  StringRef name = definition->getName().getStringRef();
-  if ((name == "tt.splat" || name == "tt.broadcast") &&
-      definition->getNumOperands() == 1)
-    return constantInteger(definition->getOperand(0));
-  if (name != "arith.constant")
-    return std::nullopt;
-  auto integer = dyn_cast_or_null<IntegerAttr>(definition->getAttr("value"));
-  if (integer)
-    return integer.getInt();
-  return std::nullopt;
-}
-
-static std::optional<int64_t> rangeAxis(Value value, unsigned rank) {
-  Operation *definition = value.getDefiningOp();
-  if (!definition)
-    return std::nullopt;
-  StringRef name = definition->getName().getStringRef();
-  if (name == "tt.make_range")
-    return rank >= 1 ? std::optional<int64_t>(0) : std::nullopt;
-  if (name == "tt.expand_dims" && definition->getNumOperands() == 1) {
-    auto axis = dyn_cast_or_null<IntegerAttr>(definition->getAttr("axis"));
-    auto prior = rangeAxis(definition->getOperand(0), rank - 1);
-    if (!axis || !prior)
-      return std::nullopt;
-    return *prior >= axis.getInt() ? *prior + 1 : *prior;
-  }
-  if (name == "tt.broadcast" && definition->getNumOperands() == 1) {
-    auto sourceType =
-        dyn_cast<RankedTensorType>(definition->getOperand(0).getType());
-    auto resultType = dyn_cast<RankedTensorType>(value.getType());
-    if (!sourceType || !resultType ||
-        sourceType.getRank() > resultType.getRank())
-      return std::nullopt;
-    auto prior = rangeAxis(definition->getOperand(0), sourceType.getRank());
-    if (!prior)
-      return std::nullopt;
-    return *prior + resultType.getRank() - sourceType.getRank();
-  }
-  return std::nullopt;
-}
-
-static std::optional<int64_t> rangeBound(Value value, int64_t extent) {
-  Operation *definition = value.getDefiningOp();
-  if (!definition || definition->getName().getStringRef() != "tt.make_range")
-    return std::nullopt;
-  auto start = dyn_cast_or_null<IntegerAttr>(definition->getAttr("start"));
-  auto end = dyn_cast_or_null<IntegerAttr>(definition->getAttr("end"));
-  if (!start || !end || start.getInt() != 0)
-    return std::nullopt;
-  return std::min(end.getInt(), extent);
-}
-
-static bool collectMaskBounds(Value mask, ArrayRef<int64_t> fullShape,
-                              SmallVectorImpl<int64_t> &logicalShape) {
-  if (auto andOp = mask.getDefiningOp()) {
-    StringRef name = andOp->getName().getStringRef();
-    if ((name == "tt.broadcast" || name == "tt.expand_dims") &&
-        andOp->getNumOperands() == 1)
-      return collectMaskBounds(andOp->getOperand(0), fullShape, logicalShape);
-    if (andOp->getName().getStringRef() == "arith.andi" &&
-        andOp->getNumOperands() == 2) {
-      SmallVector<int64_t> lhs(fullShape), rhs(fullShape);
-      if (!collectMaskBounds(andOp->getOperand(0), fullShape, lhs) ||
-          !collectMaskBounds(andOp->getOperand(1), fullShape, rhs))
-        return false;
-      for (auto [index, extent] : llvm::enumerate(fullShape))
-        logicalShape[index] = std::min(lhs[index], rhs[index]);
-      return true;
-    }
-    if (andOp->getName().getStringRef() == "arith.cmpi" &&
-        andOp->getNumOperands() == 2) {
-      auto predicate = dyn_cast<arith::CmpIOp>(andOp);
-      if (!predicate || predicate.getPredicate() != arith::CmpIPredicate::slt)
-        return false;
-      Value range = andOp->getOperand(0);
-      auto axis = rangeAxis(range, fullShape.size());
-      auto bound = constantInteger(andOp->getOperand(1));
-      if (!axis || !bound || *axis < 0 || *axis >= fullShape.size())
-        return false;
-      auto start = rangeBound(range, fullShape[*axis]);
-      if (!start)
-        return false;
-      int64_t logical = std::max<int64_t>(0, std::min(*bound, *start));
-      logicalShape[*axis] = std::min(logicalShape[*axis], logical);
-      return true;
-    }
-  }
-  Operation *definition = mask.getDefiningOp();
-  if (definition && definition->getName().getStringRef() == "arith.constant") {
-    auto dense =
-        dyn_cast_or_null<DenseElementsAttr>(definition->getAttr("value"));
-    return dense && dense.isSplat() &&
-           dense.getSplatValue<llvm::APInt>().isAllOnes();
-  }
-  return false;
-}
-
-} // namespace
 
 static std::optional<ttatlas::PadNeutral> requiredNeutral(Value value,
                                                           unsigned depth = 0) {
@@ -191,15 +87,25 @@ tagMaskedBoundaries(ModuleOp module,
     auto tensor = dyn_cast<RankedTensorType>(value.getType());
     if (!tensor || (tensor.getRank() != 1 && tensor.getRank() != 2))
       return;
-    SmallVector<int64_t> logicalShape(tensor.getShape().begin(),
-                                      tensor.getShape().end());
-    if (!collectMaskBounds(mask, tensor.getShape(), logicalShape)) {
+    // The shared lane evaluator decides what "compile-time mask" means: it
+    // follows expand_dims/broadcast axes and constant bounds. The true lanes
+    // must form the leading box of the tile; that box is the logical shape.
+    std::optional<SmallVector<int64_t>> bounds = maskBounds(mask);
+    if (!bounds || bounds->size() != tensor.getShape().size()) {
       ttatlas::emitUnsupported(
           op,
-          "edge mask is not a static make_range comparison against a constant");
+          "edge mask is not a static make_range comparison against a constant: "
+          "its true lanes are not a compile-time leading box (a runtime "
+          "bound, or a mask like offs > k)");
       failed = true;
       return;
     }
+    if (llvm::is_contained(*bounds, 0)) {
+      ttatlas::emitUnsupported(op, "edge mask has no true lane");
+      failed = true;
+      return;
+    }
+    SmallVector<int64_t> logicalShape = *bounds;
     if (logicalShape == tensor.getShape())
       return;
 
