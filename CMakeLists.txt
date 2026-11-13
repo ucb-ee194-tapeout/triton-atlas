@@ -172,6 +172,13 @@ target_link_libraries(
         -Wl,--no-as-needed
         "${TRITON_LIB}"
         -Wl,--as-needed
+        # linalg (passes 3-5) isn't in libtriton, so it comes from MLIR's static libraries. Only those libtriton
+        # lacks are named here; CMake adds their dependencies after them. Coming after libtriton, they fill in only
+        # what it lacks; before it, they'd add second copies of what it exports (85 duplicate type IDs in the
+        # feasibility review's scratch plugin, 2026-11-06). A pass that uses a new dialect adds its library here if
+        # libtriton doesn't export it; --no-undefined names what's missing.
+        MLIRLinalgDialect
+        MLIRLinalgTransforms
 )
 
 # clangd finds compile_commands.json at the repo root with no settings. Triton's setup.py links it the same way.
