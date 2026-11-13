@@ -47,6 +47,18 @@ tt.func @conversions(%x: tensor<32x32xbf16>) -> tensor<32x32xbf16> {
 
 // -----
 
+// A widening tt.fp_to_fp with a rounding mode converts like any widening: it is exact, so the mode doesn't matter.
+// CHECK-LABEL: tt.func @widen_rtz
+// CHECK: linalg.generic
+// CHECK: arith.extf %{{.*}} : bf16 to f32
+// CHECK-NOT: tt.fp_to_fp
+tt.func @widen_rtz(%x: tensor<32x32xbf16>) -> tensor<32x32xf32> {
+  %e = tt.fp_to_fp %x, rounding = rtz : tensor<32x32xbf16> -> tensor<32x32xf32>
+  tt.return %e : tensor<32x32xf32>
+}
+
+// -----
+
 // ttatlas tags on an arith op end up on the generic, not on the scalar op in its body.
 // CHECK-LABEL: tt.func @tags
 // CHECK: linalg.generic {{.*}} attrs = {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [32, 16]>}

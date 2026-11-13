@@ -112,11 +112,14 @@ struct FpToFpToArith : OpConversionPattern<FpToFpOp> {
     auto from = cast<FloatType>(getElementTypeOrSelf(op.getSrc().getType()));
     auto to = cast<FloatType>(getElementTypeOrSelf(op.getType()));
     // Equal widths (f16 <-> bf16) have no arith cast; a narrowing with a
-    // rounding other than to-nearest-even isn't what arith.truncf does.
+    // rounding other than to-nearest-even isn't what arith.truncf does. A
+    // widening is exact, so its rounding mode doesn't matter (pass 1 and
+    // checkCompute check rounding only on narrowing, too).
     if (from.getWidth() == to.getWidth())
       return rewriter.notifyMatchFailure(op, "no arith cast between equal "
                                              "widths");
-    if (op.getRounding() && *op.getRounding() != RoundingMode::RTNE)
+    if (to.getWidth() < from.getWidth() && op.getRounding() &&
+        *op.getRounding() != RoundingMode::RTNE)
       return rewriter.notifyMatchFailure(op, "rounding is not rtne");
     Operation *cast;
     if (to.getWidth() > from.getWidth())
