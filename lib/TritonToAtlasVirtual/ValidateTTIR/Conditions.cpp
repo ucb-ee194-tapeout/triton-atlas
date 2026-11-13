@@ -73,20 +73,9 @@ LogicalResult checkFunc(FuncOp func, EmitFn emit) {
   return success();
 }
 
-// Masks reach a load or store through cmpi and andi, which are illegal; this
-// also catches one from anywhere else (a constant). Pass 4 takes over with
-// the rest of the mask rules when it learns masks.
-LogicalResult checkUnmasked(Value mask, EmitFn emit) {
-  if (!mask)
-    return success();
-  return fail(emit, Twine("no lowering yet: ") + kMaskReason);
-}
-
 LogicalResult checkLoad(LoadOp load, EmitFn emit) {
   if (!isa<RankedTensorType>(load.getType()))
     return fail(emit, "a scalar load; Atlas loads whole tiles");
-  if (failed(checkUnmasked(load.getMask(), emit)))
-    return failure();
   Type dtype = pointee(load.getPtr());
   if (dtype.isF32())
     return fail(emit, "an f32 source; Atlas has no f32 datapath and no "
@@ -100,8 +89,6 @@ LogicalResult checkLoad(LoadOp load, EmitFn emit) {
 LogicalResult checkStore(StoreOp store, EmitFn emit) {
   if (!isa<RankedTensorType>(store.getValue().getType()))
     return fail(emit, "a scalar store; Atlas stores whole tiles");
-  if (failed(checkUnmasked(store.getMask(), emit)))
-    return failure();
   Type dtype = pointee(store.getPtr());
   if (!dtype.isBF16() && !dtype.isF32())
     return fail(emit, "stores " + printed(dtype) +
@@ -204,14 +191,6 @@ LogicalResult checkTrans(TransOp trans, EmitFn emit) {
   return success();
 }
 
-// A mask has no lowering yet, but tl.assume's condition (pid >= 0, say) is a
-// cmpi too, and the inventory drops the assume; the cmpi is then dead.
-LogicalResult checkCmpI(arith::CmpIOp cmp, EmitFn emit) {
-  if (onlyFeedsAssumes(cmp))
-    return success();
-  return fail(emit, Twine("no lowering yet: ") + kMaskReason);
-}
-
 LogicalResult checkPoison(ub::PoisonOp poison, EmitFn emit) {
   if (poison->use_empty())
     return success();
@@ -246,7 +225,6 @@ LogicalResult checkConditions(Operation *op, EmitFn emit) {
       .Case([&](arith::DivFOp divf) { return checkDivF(divf, emit); })
       .Case([&](ReduceOp reduce) { return checkReduce(reduce, emit); })
       .Case([&](TransOp trans) { return checkTrans(trans, emit); })
-      .Case([&](arith::CmpIOp cmp) { return checkCmpI(cmp, emit); })
       .Case([&](ub::PoisonOp poison) { return checkPoison(poison, emit); })
       .Case([&](scf::ForOp loop) { return checkFor(loop, emit); })
       .Default([](Operation *) { return success(); });

@@ -53,6 +53,9 @@ void addLegal(ConversionTarget &target) {
                     arith::MulFOp, arith::MaxNumFOp, arith::MinNumFOp,
                     arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp,
                     arith::MulIOp, math::ExpOp, math::Exp2Op, scf::YieldOp>();
+  // Masks: pass 4 turns a mask with compile-time bounds into padding and
+  // rejects any other (a runtime bound, a compare that isn't offs < N).
+  target.addLegalOp<arith::CmpIOp, arith::AndIOp>();
 }
 
 // Legal only when their condition holds (Conditions.cpp).
@@ -61,11 +64,9 @@ void addConditionallyLegal(ConversionTarget &target) {
     return succeeded(checkConditions(op, nullptr));
   };
   // unverified: tt.fp_to_fp's rounding mode isn't checked.
-  target
-      .addDynamicallyLegalOp<FuncOp, LoadOp, StoreOp, FpToFpOp, arith::ExtFOp,
-                             arith::TruncFOp, arith::DivFOp, ReduceOp, TransOp,
-                             ub::PoisonOp, scf::ForOp, arith::CmpIOp, DotOp>(
-          holds);
+  target.addDynamicallyLegalOp<FuncOp, LoadOp, StoreOp, FpToFpOp, arith::ExtFOp,
+                               arith::TruncFOp, arith::DivFOp, ReduceOp,
+                               TransOp, ub::PoisonOp, scf::ForOp, DotOp>(holds);
 }
 
 // Atlas has an equivalent, but no pass lowers it yet.
@@ -73,8 +74,6 @@ void addNoLoweringYet(Rejection r) {
   r.reject<MakeTensorDescOp, DescriptorLoadOp, DescriptorStoreOp>(
       "descriptor kernels; Triton's descriptor rewrite leaves masks, i64 "
       "offsets and reshapes, not plain pointers");
-  // (arith.cmpi is conditionally legal: see Conditions.cpp checkCmpI.)
-  r.reject<arith::AndIOp>(kMaskReason);
   // Pass 6 proves each load's and store's address is one whole tile.
   r.reject<arith::SubIOp>(
       "subtraction in address math; pass 6 doesn't evaluate it yet");

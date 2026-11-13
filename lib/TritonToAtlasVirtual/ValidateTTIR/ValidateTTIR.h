@@ -13,12 +13,6 @@ namespace mlir::triton::validate {
 // The error text of each illegal op in the inventory, "<kind>: <detail>".
 using Reasons = DenseMap<OperationName, std::string>;
 
-// Why masks (arith.cmpi, arith.andi) are rejected. Pass 4 will turn masks with
-// compile-time bounds into padding (pass 4 page, "Grows"); then their rows
-// become legal and pass 4 owns the rules on them (runtime bounds, `other`).
-inline constexpr StringLiteral kMaskReason =
-    "masks; pass 4 doesn't turn them into padding yet";
-
 // Reports why an op breaks a condition. Null when the caller only asks whether
 // the condition holds (a legality callback).
 using EmitFn = function_ref<InFlightDiagnostic()>;
