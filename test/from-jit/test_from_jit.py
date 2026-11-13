@@ -50,19 +50,23 @@ LAST = max(STAGES)
 FP8, BF16, FP32 = "*fp8e4nv", "*bf16", "*fp32"
 
 
-def row(name, fn, signature, passes_ok=LAST, first_error=None, constexprs=None, end_to_end=False):
+def row(name, fn, signature, passes_ok=LAST, first_error=None, constexprs=None, end_to_end=False,
+        end_to_end_error=None):
     return dict(name=name, fn=fn, signature=signature, constexprs=constexprs or {}, passes_ok=passes_ok,
-                first_error=first_error, end_to_end=end_to_end)
+                first_error=first_error, end_to_end=end_to_end or end_to_end_error is not None,
+                end_to_end_error=end_to_end_error)
 
 
 # passes_ok: the last stage the kernel passes (0 = not even stage 1). first_error: a regex the next stage's first
-# "error:" line must match; required when passes_ok < LAST.
+# "error:" line must match; required when passes_ok < LAST. end_to_end_error: a known gap in the full triton.compile,
+# as a regex its error must match (an expected failure); the row fails once the compile succeeds, so flip it then.
 ROWS = [
     row("mlp", kernels.mlp, {"X": FP8, "W": FP8, "B": BF16, "Y": BF16}, end_to_end=True),
     row("matmul_relu", kernels.matmul_relu, {"A": FP8, "B": FP8, "C": FP32}, end_to_end=True),
-    # No end-to-end compile yet: pass 6 does not read a tile with a row stride other than 32 (A's stride is K = 128),
-    # a planned gap of the pass 6 lane (next PR); stages 1-5 still run.
-    row("mm32", kernels.mm32, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"}, constexprs={"K": 128}),
+    # Expected end-to-end failure: pass 6 does not read a tile with a row stride other than 32 yet (A's stride is
+    # K = 128), a planned gap for the pass 6 lane's next PR; stages 1-5 run as usual.
+    row("mm32", kernels.mm32, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"}, constexprs={"K": 128},
+        end_to_end_error=r"cannot prove contiguous row-major tile"),
     row("bias_seeded_k_loop", kernels.bias_seeded_k_loop,
         {"A": FP8, "Bm": FP8, "Bias": BF16, "C": BF16, "K": "constexpr"}, constexprs={"K": 128}),
     row("unrolled_by_triton", kernels.unrolled_by_triton, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"},
@@ -134,13 +138,32 @@ def check_row(opt, r, tmp):
                 failures.append(f"{r['name']}: stage {k} fails with an unexpected error: {err}")
             break
     if r["end_to_end"]:
-        try:
-            compiled = triton.compile(ASTSource(fn=r["fn"], signature=r["signature"], constexprs=r["constexprs"]),
-                                      target=TARGET)
-            if not compiled.asm.get("atlas_virtual"):
-                failures.append(f"{r['name']}: triton.compile gave no atlas_virtual output")
-        except Exception as e:  # noqa: BLE001 (any compile failure is a test failure)
-            failures.append(f"{r['name']}: triton.compile failed: {type(e).__name__}: {str(e).splitlines()[0]}")
+        # MLIR prints its diagnostics to the process's stderr, not into the exception, so capture fd 2 to match an
+        # expected error.
+        with tempfile.TemporaryFile(mode="w+") as log:
+            saved = os.dup(2)
+            os.dup2(log.fileno(), 2)
+            try:
+                compiled = triton.compile(ASTSource(fn=r["fn"], signature=r["signature"], constexprs=r["constexprs"]),
+                                          target=TARGET)
+                error = None
+            except Exception as e:  # noqa: BLE001 (any compile failure is a test failure)
+                error = f"{type(e).__name__}: {str(e).splitlines()[0]}"
+            finally:
+                os.dup2(saved, 2)
+                os.close(saved)
+            log.seek(0)
+            stderr = log.read()
+        if r["end_to_end_error"]:
+            if error is None:
+                failures.append(f"{r['name']}: triton.compile now succeeds; drop end_to_end_error from the table")
+            elif not re.search(r["end_to_end_error"], stderr + error):
+                failures.append(f"{r['name']}: triton.compile failed with an unexpected error: {error}")
+        elif error is not None:
+            sys.stderr.write(stderr)
+            failures.append(f"{r['name']}: triton.compile failed: {error}")
+        elif not compiled.asm.get("atlas_virtual"):
+            failures.append(f"{r['name']}: triton.compile gave no atlas_virtual output")
     return failures
 
 
