@@ -340,3 +340,54 @@ tt.func @sum_and_max_of_one_load(%ptr: !tt.ptr<f32>, %out: !tt.ptr<f32>) {
   tt.store %optrs, %total : tensor<32x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// A 64x64 load masked to 50 rows and 40 columns, stored straight back: each boundary tile is tagged with its own
+// share of the real lanes (tile (0,0) is full and has none), on the load's tile slice and on the stored tile.
+// CHECK-LABEL: tt.func @tags_per_tile_2d
+// CHECK-DAG: extract_slice {{.*}}[0, 32] [32, 32] [1, 1] {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [32, 8]>}
+// CHECK-DAG: extract_slice {{.*}}[32, 0] [32, 32] [1, 1] {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [18, 32]>}
+// CHECK-DAG: extract_slice {{.*}}[32, 32] [32, 32] [1, 1] {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [18, 8]>}
+// CHECK-DAG: extract_slice {{.*}}[0, 0] [32, 32] [1, 1] :
+tt.func @tags_per_tile_2d(%ptr: !tt.ptr<f32>) {
+  %c50 = arith.constant 50 : i32
+  %c40 = arith.constant 40 : i32
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>>
+  %rows = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
+  %row_limit = tt.splat %c50 : i32 -> tensor<64xi32>
+  %row_cmp = arith.cmpi slt, %rows, %row_limit : tensor<64xi32>
+  %row_mask = tt.expand_dims %row_cmp {axis = 1 : i32} : tensor<64xi1> -> tensor<64x1xi1>
+  %row_full = tt.broadcast %row_mask : tensor<64x1xi1> -> tensor<64x64xi1>
+  %col_limit = tt.splat %c40 : i32 -> tensor<64xi32>
+  %col_cmp = arith.cmpi slt, %rows, %col_limit : tensor<64xi32>
+  %col_mask = tt.expand_dims %col_cmp {axis = 0 : i32} : tensor<64xi1> -> tensor<1x64xi1>
+  %col_full = tt.broadcast %col_mask : tensor<1x64xi1> -> tensor<64x64xi1>
+  %mask = arith.andi %row_full, %col_full : tensor<64x64xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<64x64xf32>
+  %x = tt.load %ptrs, %mask, %zero : tensor<64x64x!tt.ptr<f32>>
+  %e = tensor.empty() : tensor<64x64xf32>
+  %y = linalg.add ins(%x, %x : tensor<64x64xf32>, tensor<64x64xf32>) outs(%e : tensor<64x64xf32>) -> tensor<64x64xf32>
+  tt.store %ptrs, %y, %mask : tensor<64x64x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
+// The same for a rank-1 load of 40 lanes masked from 64: the second tile holds 8 real lanes, and a row's tag is
+// [1, n].
+// CHECK-LABEL: tt.func @tags_per_tile_1d
+// CHECK: ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [1, 8]>
+tt.func @tags_per_tile_1d(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<64x!tt.ptr<f32>>
+  %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
+  %limit = arith.constant 40 : i32
+  %limits = tt.splat %limit : i32 -> tensor<64xi32>
+  %mask = arith.cmpi slt, %range, %limits : tensor<64xi32>
+  %zero = arith.constant dense<0.000000e+00> : tensor<64xf32>
+  %x = tt.load %ptrs, %mask, %zero : tensor<64x!tt.ptr<f32>>
+  %e = tensor.empty() : tensor<64xf32>
+  %y = linalg.add ins(%x, %x : tensor<64xf32>, tensor<64xf32>) outs(%e : tensor<64xf32>) -> tensor<64xf32>
+  tt.store %ptrs, %y, %mask : tensor<64x!tt.ptr<f32>>
+  tt.return
+}
