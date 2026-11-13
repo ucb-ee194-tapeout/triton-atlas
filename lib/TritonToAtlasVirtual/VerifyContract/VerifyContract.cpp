@@ -68,7 +68,8 @@ bool isReadout(Operation *op) {
   return body.getOperations().size() == 2 && narrow &&
          narrow.getIn() == body.getArgument(0) &&
          body.getTerminator()->getOperand(0) == narrow.getResult() &&
-         narrow.getIn().getType().isF32() && narrow.getType().isBF16();
+         narrow.getIn().getType().isF32() && narrow.getType().isBF16() &&
+         getElementTypeOrSelf(op->getResult(0).getType()).isBF16();
 }
 // Inside a linalg op's body: scalar code that the op's own checks cover.
 bool inLinalgBody(Operation *op) {
@@ -353,6 +354,14 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
         check(result);
       if (readouts.contains(op))
         return;
+      // Only the chain and its readout may read the f32 accumulator; anything
+      // else (a partial sum stored as is) would need f32 outside the MXU.
+      // Other f32 values are flagged where they are defined.
+      for (Value operand : op->getOperands())
+        if (Operation *def = operand.getDefiningOp();
+            def && accumulator.contains(def) && isMatmul(def))
+          broken(op, "reads a matmul chain's f32 accumulator outside its "
+                     "chain and readout");
       for (Region &region : op->getRegions())
         for (Block &block : region)
           for (BlockArgument argument : block.getArguments()) {

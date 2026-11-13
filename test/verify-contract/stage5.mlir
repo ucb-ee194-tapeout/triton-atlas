@@ -110,3 +110,25 @@ tt.func @f32_in_body(%x: tensor<32x32xbf16>) {
   } -> tensor<32x32xbf16>
   tt.return
 }
+
+// -----
+
+// A partial sum stored as is leaves the MXU in f32: only the chain and its readout may read the accumulator. (Its
+// f32 pointer is flagged too.)
+// expected-error @below {{contract of pass 5 broken: float value or pointer is neither BF16 nor FP8}}
+tt.func @partial_stored(%a: tensor<32x32xf8E4M3FN>, %p: tensor<32x32x!tt.ptr<f32>>) {
+  %zero = arith.constant 0.000000e+00 : f32
+  %empty = tensor.empty() : tensor<32x32xf32>
+  %acc = linalg.fill ins(%zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %m0 = linalg.matmul ins(%a, %a : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %m1 = linalg.matmul ins(%a, %a : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%m0 : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %out = tensor.empty() : tensor<32x32xbf16>
+  %r = linalg.generic {indexing_maps = [affine_map<(d0, d1) -> (d0, d1)>, affine_map<(d0, d1) -> (d0, d1)>], iterator_types = ["parallel", "parallel"]} ins(%m1 : tensor<32x32xf32>) outs(%out : tensor<32x32xbf16>) {
+  ^bb0(%in: f32, %o: bf16):
+    %t = arith.truncf %in : f32 to bf16
+    linalg.yield %t : bf16
+  } -> tensor<32x32xbf16>
+  // expected-error @below {{contract of pass 5 broken: reads a matmul chain's f32 accumulator outside its chain and readout}}
+  tt.store %p, %m0 : tensor<32x32x!tt.ptr<f32>>
+  tt.return
+}
