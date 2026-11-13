@@ -133,3 +133,20 @@ tt.func @zero_start(%a: tensor<32x32xf8E4M3FN>, %b: tensor<32x32xf8E4M3FN>) -> t
   %d = tt.dot %a, %b, %zero : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
   tt.return %d : tensor<32x32xf32>
 }
+
+// -----
+
+// A constant loop that runs zero times is replaced by its initial value; no scf.for is left.
+// CHECK-LABEL: tt.func @zero_trip
+// CHECK-NOT: scf.for
+// CHECK-NOT: tt.dot
+// CHECK: tt.return %arg2
+tt.func @zero_trip(%a: tensor<32x32xf8E4M3FN>, %b: tensor<32x32xf8E4M3FN>, %init: tensor<32x32xf32>) -> tensor<32x32xf32> {
+  %c4 = arith.constant 4 : i32
+  %c1 = arith.constant 1 : i32
+  %acc = scf.for %k = %c4 to %c4 step %c1 iter_args(%s = %init) -> (tensor<32x32xf32>) : i32 {
+    %d = tt.dot %a, %b, %s : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
+    scf.yield %d : tensor<32x32xf32>
+  }
+  tt.return %acc : tensor<32x32xf32>
+}

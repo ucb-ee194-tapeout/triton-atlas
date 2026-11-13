@@ -8,6 +8,7 @@
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
+#include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -28,14 +29,25 @@ namespace tta = mlir::ttatlas;
 // tile" (atlas-hw: pass 2 page, "Why unroll constant-count loops"). Inner
 // loops go first, so a bound computed from an outer loop's counter fails here;
 // pass 1 rejects it as a runtime trip count.
+// A loop that runs zero times (constant lower bound >= upper bound) is
+// replaced by its initial values: loopUnrollFull succeeds on it without
+// removing it, which would leave an scf.for behind.
 LogicalResult unrollLoops(ModuleOp module) {
   SmallVector<scf::ForOp> loops;
   module.walk([&](scf::ForOp loop) { loops.push_back(loop); }); // inner first
-  for (scf::ForOp loop : loops)
+  IRRewriter rewriter(module.getContext());
+  for (scf::ForOp loop : loops) {
+    std::optional<int64_t> lower = getConstantIntValue(loop.getLowerBound());
+    std::optional<int64_t> upper = getConstantIntValue(loop.getUpperBound());
+    if (lower && upper && *lower >= *upper) {
+      rewriter.replaceOp(loop, loop.getInitArgs());
+      continue;
+    }
     if (failed(loopUnrollFull(loop)))
       return loop.emitError(
           "ttatlas-normalize: can't unroll this loop: its trip count isn't a "
           "constant (ttatlas-validate-ttir rejects such loops)");
+  }
   return success();
 }
 
