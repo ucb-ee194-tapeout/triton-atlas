@@ -365,9 +365,49 @@ void eraseDeadLeftovers(ModuleOp module) {
   (void)runRegionDCE(rewriter, module->getRegions());
 }
 
+// Rejects, before the conversion, the float compute this pass has no linalg
+// form for, so it fails with a reason instead of slipping through: a
+// tt.fp_to_fp between equal widths or narrowing with a rounding other than
+// to nearest even (arith.truncf's), and any other tt op that makes a float
+// tensor (tt.precise_sqrt, tt.extern_elementwise, ...). Upstream's elementwise
+// pattern would wrap either, unconverted, in a linalg.generic, and the
+// partial conversion leaves ops it has no target rule for. Pass 1 rejects all
+// of these first; this keeps the rule when pass 3 runs alone. The stage-3
+// contract check forbids the same set.
+LogicalResult checkCompute(ModuleOp module) {
+  bool failed = false;
+  module.walk([&](Operation *op) {
+    if (op->getName().getDialectNamespace() != "tt" ||
+        !llvm::any_of(op->getResultTypes(), isFloatTensor))
+      return;
+    if (auto fpToFp = dyn_cast<FpToFpOp>(op)) {
+      auto from =
+          cast<FloatType>(getElementTypeOrSelf(fpToFp.getSrc().getType()));
+      auto to = cast<FloatType>(getElementTypeOrSelf(fpToFp.getType()));
+      std::optional<RoundingMode> rounding = fpToFp.getRounding();
+      bool narrowing = to.getWidth() < from.getWidth();
+      if (from.getWidth() == to.getWidth() ||
+          (narrowing && rounding && *rounding != RoundingMode::RTNE)) {
+        tta::emitUnsupported(op, "converts with no arith form (equal widths, "
+                                 "or narrowing that isn't rtne)");
+        failed = true;
+      }
+      return;
+    }
+    if (isa<LoadOp, DotOp, TransOp, BroadcastOp, SplatOp, ExpandDimsOp,
+            ReduceOp>(op))
+      return;
+    tta::emitUnsupported(op, "pass 3 has no linalg form for this float op");
+    failed = true;
+  });
+  return ::mlir::failure(failed);
+}
+
 struct ConvertTritonComputeToLinalg
     : impl::ConvertTritonComputeToLinalgBase<ConvertTritonComputeToLinalg> {
   void runOnOperation() override {
+    if (failed(checkCompute(getOperation())))
+      return signalPassFailure();
     MLIRContext *context = &getContext();
     ConversionTarget target(*context);
     target.addLegalDialect<linalg::LinalgDialect, tensor::TensorDialect>();
@@ -388,7 +428,8 @@ struct ConvertTritonComputeToLinalg
     });
     target.addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect>(
         [](Operation *op) { return !isFloatElementwise(op); });
-    // Everything else stays as it is: loads, stores, pointers, address math.
+    // Everything else stays as it is: loads, stores, pointers, address math
+    // (checkCompute has rejected float compute without a pattern).
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
     RewritePatternSet patterns(context);
