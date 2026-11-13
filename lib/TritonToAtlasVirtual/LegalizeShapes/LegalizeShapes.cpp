@@ -72,8 +72,8 @@ struct LiveOps : RewriterBase::Listener {
 struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    DenseMap<Operation *, Attribute> storePadTags;
-    if (failed(tagMaskedBoundaries(module, storePadTags))) {
+    MaskBoxes maskBoxes;
+    if (failed(readMaskedBoundaries(module, maskBoxes))) {
       signalPassFailure();
       return;
     }
@@ -259,7 +259,7 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       return;
     }
 
-    if (failed(propagateStorePadTags(storePadTags))) {
+    if (failed(tagBoundaryTiles(module, maskBoxes))) {
       signalPassFailure();
       return;
     }

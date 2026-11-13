@@ -47,7 +47,8 @@ def TTAtlas_KChainAttr : TTAtlas_Attr<"KChain", "k_chain"> {
   let assemblyFormat = "`<` struct(params) `>`";
 }
 
-// On the op defining a padded value, set by ttatlas-legalize-shapes (pass 4), read by passes 6 and 7.
+// On the op that yields one memory boundary tile that holds padded lanes, set by ttatlas-legalize-shapes (pass 4),
+// read by passes 6 and 7. The logical shape is that tile's own and always [rows, cols] (a row of n is [1, n]).
 def TTAtlas_PadAttr : TTAtlas_Attr<"Pad", "pad"> {
   let summary = "neutral element of a value's padded lanes and its unpadded shape";
   let parameters = (ins "::mlir::ttatlas::PadNeutral":$neutral, ArrayRefParameter<"int64_t">:$logical_shape);

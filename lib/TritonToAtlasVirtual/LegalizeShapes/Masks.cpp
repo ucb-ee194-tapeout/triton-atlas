@@ -1,5 +1,6 @@
-// Pass 4, mask analysis: turns the bounds a load or store mask proves into
-// ttatlas.pad tags (the neutral value of the padded lanes).
+// Pass 4, mask analysis: reads the bounds a load or store mask proves and the
+// neutral value of the padded lanes. Padding.cpp turns them into per-tile
+// ttatlas.pad tags once tiling has made the tiles.
 #include "LegalizeShapes.h"
 
 #include "TritonToAtlasVirtual/LaneValues.h"
@@ -7,6 +8,7 @@
 
 #include "TTAtlas/AtlasTarget.h"
 #include "TTAtlas/TTAtlas.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -18,6 +20,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/TilingInterface.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -28,6 +31,8 @@
 
 namespace mlir::triton {
 
+// The pad value the consumers of `value` need in its padded lanes, looking
+// through conversions and slices to the ops that read it.
 static std::optional<ttatlas::PadNeutral> requiredNeutral(Value value,
                                                           unsigned depth = 0) {
   if (depth > 12)
@@ -35,16 +40,13 @@ static std::optional<ttatlas::PadNeutral> requiredNeutral(Value value,
   Operation *definition = value.getDefiningOp();
   if (!definition)
     return std::nullopt;
-  StringRef name = definition->getName().getStringRef();
-  if ((name == "arith.truncf" || name == "arith.extf" ||
-       name == "tt.fp_to_fp") &&
-      definition->getNumOperands() == 1)
-    return requiredNeutral(definition->getOperand(0), depth + 1);
-  if (name == "tensor.extract_slice" && definition->getNumResults() == 1) {
+  // What the readers of `value` need: a slice passes the question on to its
+  // own readers, anything else answers for itself.
+  auto readersNeed = [&](Value read) -> std::optional<ttatlas::PadNeutral> {
     std::optional<ttatlas::PadNeutral> result;
-    for (Operation *user : definition->getResult(0).getUsers()) {
+    for (Operation *user : read.getUsers()) {
       std::optional<ttatlas::PadNeutral> current =
-          user->getName().getStringRef() == "tensor.extract_slice"
+          isa<tensor::ExtractSliceOp>(user)
               ? requiredNeutral(user->getResult(0), depth + 1)
               : operationNeutral(user);
       if (!current || (result && *result != *current))
@@ -52,38 +54,29 @@ static std::optional<ttatlas::PadNeutral> requiredNeutral(Value value,
       result = current;
     }
     return result;
-  }
-  if (name == "tensor.insert_slice" && definition->getNumOperands() > 0)
+  };
+  if (isa<arith::TruncFOp, arith::ExtFOp, FpToFpOp>(definition))
     return requiredNeutral(definition->getOperand(0), depth + 1);
-  if (name == "tt.load") {
-    std::optional<ttatlas::PadNeutral> result;
-    for (Operation *user : value.getUsers()) {
-      std::optional<ttatlas::PadNeutral> current =
-          user->getName().getStringRef() == "tensor.extract_slice"
-              ? requiredNeutral(user->getResult(0), depth + 1)
-              : operationNeutral(user);
-      if (!current || (result && *result != *current))
-        return std::nullopt;
-      result = current;
-    }
-    return result;
-  }
+  if (isa<tensor::ExtractSliceOp>(definition))
+    return readersNeed(definition->getResult(0));
+  if (isa<tensor::InsertSliceOp>(definition))
+    return requiredNeutral(definition->getOperand(0), depth + 1);
+  if (isa<LoadOp>(definition))
+    return readersNeed(value);
   return operationNeutral(definition);
 }
 
-LogicalResult
-tagMaskedBoundaries(ModuleOp module,
-                    DenseMap<Operation *, Attribute> &storePadTags) {
+LogicalResult readMaskedBoundaries(ModuleOp module, MaskBoxes &boxes) {
   bool failed = false;
-  DenseMap<Operation *, Attribute> tags;
   module.walk([&](Operation *op) {
-    StringRef name = op->getName().getStringRef();
-    bool isLoad = name == "tt.load";
-    bool isStore = name == "tt.store";
-    if ((!isLoad && !isStore) || op->getNumOperands() < (isLoad ? 2u : 3u))
+    auto load = dyn_cast<LoadOp>(op);
+    auto store = dyn_cast<StoreOp>(op);
+    if (!load && !store)
       return;
-    Value mask = op->getOperand(isLoad ? 1 : 2);
-    Value value = isLoad ? op->getResult(0) : op->getOperand(1);
+    Value mask = load ? load.getMask() : store.getMask();
+    if (!mask)
+      return;
+    Value value = load ? load.getResult() : store.getValue();
     auto tensor = dyn_cast<RankedTensorType>(value.getType());
     if (!tensor || (tensor.getRank() != 1 && tensor.getRank() != 2))
       return;
@@ -103,29 +96,28 @@ tagMaskedBoundaries(ModuleOp module,
       failed = true;
       return;
     }
-    SmallVector<int64_t> logicalShape = *bounds;
-    if (logicalShape == tensor.getShape())
+    if (ArrayRef<int64_t>(*bounds) == tensor.getShape())
       return;
 
     std::optional<ttatlas::PadNeutral> neutral;
-    if (isLoad) {
-      if (op->getNumOperands() < 3) {
+    if (load) {
+      if (!load.getOther()) {
         ttatlas::emitUnsupported(
             op, "masked load has no explicit neutral value for padded lanes");
         failed = true;
         return;
       }
-      neutral = constantNeutral(op->getOperand(2));
-    }
-    if (isStore)
+      neutral = constantNeutral(load.getOther());
+    } else {
       neutral = requiredNeutral(value);
+    }
     if (!neutral) {
       ttatlas::emitUnsupported(
           op, "masked padded value has no supported neutral element");
       failed = true;
       return;
     }
-    if (isLoad) {
+    if (load) {
       std::optional<ttatlas::PadNeutral> consumerNeutral =
           requiredNeutral(value);
       if (!consumerNeutral || *consumerNeutral != *neutral) {
@@ -135,44 +127,11 @@ tagMaskedBoundaries(ModuleOp module,
         return;
       }
     }
-    Operation *taggedOp = isLoad ? op : value.getDefiningOp();
-    if (!taggedOp) {
-      ttatlas::emitUnsupported(op,
-                               "padded store value has no defining operation");
-      failed = true;
-      return;
-    }
-    auto pad = ttatlas::PadAttr::get(op->getContext(), *neutral, logicalShape);
-    if (Attribute old = taggedOp->getAttr(ttatlas::kPad); old && old != pad) {
-      ttatlas::emitUnsupported(
-          taggedOp, "conflicting ttatlas.pad metadata from edge masks");
-      failed = true;
-      return;
-    }
-    auto [it, inserted] = tags.try_emplace(taggedOp, pad);
-    if (!inserted && it->second != pad) {
-      ttatlas::emitUnsupported(
-          taggedOp, "conflicting ttatlas.pad metadata from edge masks");
-      failed = true;
-    }
-  });
-  if (failed)
-    return failure();
-  for (auto [op, pad] : tags) {
-    op->setAttr(ttatlas::kPad, pad);
+    boxes[op] = {*neutral, *bounds};
     ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
                                 "recognize compile-time edge mask");
-  }
-  module.walk([&](Operation *op) {
-    if (op->getName().getStringRef() == "tt.store" &&
-        op->getNumOperands() >= 3) {
-      Value value = op->getOperand(1);
-      if (Operation *definition = value.getDefiningOp())
-        if (Attribute pad = definition->getAttr(ttatlas::kPad))
-          storePadTags.try_emplace(op, pad);
-    }
   });
-  return success();
+  return failure(failed);
 }
 
 } // namespace mlir::triton

@@ -117,8 +117,11 @@ are fused into their linalg consumers where MLIR supports the pattern. Every mat
 For masked `tt.load` and `tt.store`, pass 4 recognizes `slt` comparisons of `tt.make_range` against a scalar
 constant, including `andi` combinations and the usual `expand_dims`/`broadcast` wrappers. The load's explicit
 other value or the stored value's inferred consumer neutral must be zero (add/matmul) or negative infinity
-(max-reduction); the load neutral must agree with its consumers. The pass attaches `ttatlas.pad` metadata with
-the logical shape. Dynamic shapes, unsupported mask expressions, and padding whose neutral element cannot be
+(max-reduction); the load neutral must agree with its consumers. Once the tiles exist, the pass gives each memory
+boundary tile that holds padded lanes its own `ttatlas.pad` tag with that tile's logical shape, always `[rows, cols]`
+(a row of n is `[1, n]`); a full tile has no tag. A load tile is tagged on the op that yields it: the `tt.load`
+itself, the `tensor.pad` of a load smaller than a tile, or the `extract_slice` of a larger one. A stored tile is
+tagged on the op that produces it. A tile with no real lane is dropped if nothing reads it, else rejected. Dynamic shapes, unsupported mask expressions, and padding whose neutral element cannot be
 established are rejected with an unsupported diagnostic. Partial padded input/output boundaries still require
 Pass 6 packing and cropping support; its current slot placement accepts only full tiles. Irregular compute shapes
 are therefore supported only when their boundaries already satisfy that ABI.

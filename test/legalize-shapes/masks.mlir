@@ -175,3 +175,49 @@ tt.func @expanded_range_mask(%ptr: !tt.ptr<f32>) {
   tt.store %ptrs, %result : tensor<32x32x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// A 64-row block masked to its first 50 rows: two row tiles. Tile 0 is all real lanes, so it has no tag; tile 1 holds
+// 18 real rows, so its load slice and its stored result each carry [18, 32], the tile's own shape, not the 50x32 of the
+// whole block (which tiling would otherwise copy onto both tiles).
+// CHECK-LABEL: tt.func @two_row_tiles
+// CHECK: tensor.extract_slice {{.*}} [32, 32] [1, 1] {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [18, 32]>}
+// CHECK: linalg.add {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [18, 32]>}
+// CHECK-NOT: logical_shape = [50, 32]
+tt.func @two_row_tiles(%ptr: !tt.ptr<bf16>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<bf16> -> tensor<64x32x!tt.ptr<bf16>>
+  %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
+  %limit = arith.constant 50 : i32
+  %limits = tt.splat %limit : i32 -> tensor<64xi32>
+  %cmp = arith.cmpi slt, %range, %limits : tensor<64xi32>
+  %rows = tt.expand_dims %cmp {axis = 1 : i32} : tensor<64xi1> -> tensor<64x1xi1>
+  %mask = tt.broadcast %rows : tensor<64x1xi1> -> tensor<64x32xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<64x32xbf16>
+  %x = tt.load %ptrs, %mask, %zero : tensor<64x32x!tt.ptr<bf16>>
+  %e = tensor.empty() : tensor<64x32xbf16>
+  %y = linalg.add ins(%x, %x : tensor<64x32xbf16>, tensor<64x32xbf16>) outs(%e : tensor<64x32xbf16>) -> tensor<64x32xbf16>
+  tt.store %ptrs, %y, %mask : tensor<64x32x!tt.ptr<bf16>>
+  tt.return
+}
+
+// -----
+
+// A 64-row block masked to 20 rows: tile 1 has no real lane, but it is still read and written, so there is nothing to
+// tell the host about it. Rejected, with a hint.
+tt.func @empty_second_tile(%ptr: !tt.ptr<bf16>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<bf16> -> tensor<64x32x!tt.ptr<bf16>>
+  %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
+  %limit = arith.constant 20 : i32
+  %limits = tt.splat %limit : i32 -> tensor<64xi32>
+  %cmp = arith.cmpi slt, %range, %limits : tensor<64xi32>
+  %rows = tt.expand_dims %cmp {axis = 1 : i32} : tensor<64xi1> -> tensor<64x1xi1>
+  %mask = tt.broadcast %rows : tensor<64x1xi1> -> tensor<64x32xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<64x32xbf16>
+  // expected-error @below {{the mask leaves a whole tile without a real lane}}
+  %x = tt.load %ptrs, %mask, %zero : tensor<64x32x!tt.ptr<bf16>>
+  %e = tensor.empty() : tensor<64x32xbf16>
+  %y = linalg.add ins(%x, %x : tensor<64x32xbf16>, tensor<64x32xbf16>) outs(%e : tensor<64x32xbf16>) -> tensor<64x32xbf16>
+  tt.store %ptrs, %y, %mask : tensor<64x32x!tt.ptr<bf16>>
+  tt.return
+}

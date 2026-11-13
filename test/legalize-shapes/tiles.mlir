@@ -120,3 +120,43 @@ func.func @matmul_relu_truncf_64(%a: tensor<64x64xf8E4M3FN>, %b: tensor<64x64xf8
   } -> tensor<64x64xbf16>
   return %t : tensor<64x64xbf16>
 }
+
+// -----
+
+// A 16x16 load and store, smaller than a tile (what add_16 in test/from-jit is): the load is read through one tensor.pad
+// up to a tile, which carries the tile's real shape, and the stored value is a 16x16 crop of the tile whose producer
+// carries the same tag. The stage-4 contract accepts both ends.
+// CHECK-LABEL: tt.func @sub_tile_add
+// CHECK: tt.load {{.*}} : tensor<16x16x!tt.ptr<bf16>>
+// CHECK: tensor.pad
+// CHECK: ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 16]>
+// CHECK: linalg.add {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 16]>}
+// CHECK: tensor.extract_slice {{.*}} [16, 16] [1, 1]
+// CHECK: tt.store
+tt.func @sub_tile_add(%in: !tt.ptr<bf16>, %out: !tt.ptr<bf16>) {
+  %ins = tt.splat %in : !tt.ptr<bf16> -> tensor<16x16x!tt.ptr<bf16>>
+  %x = tt.load %ins : tensor<16x16x!tt.ptr<bf16>>
+  %e = tensor.empty() : tensor<16x16xbf16>
+  %y = linalg.add ins(%x, %x : tensor<16x16xbf16>, tensor<16x16xbf16>) outs(%e : tensor<16x16xbf16>) -> tensor<16x16xbf16>
+  %outs = tt.splat %out : !tt.ptr<bf16> -> tensor<16x16x!tt.ptr<bf16>>
+  tt.store %outs, %y : tensor<16x16x!tt.ptr<bf16>>
+  tt.return
+}
+
+// -----
+
+// A row (a bias) of 16: the tag is still rank 2, [1, 16], never [16].
+// CHECK-LABEL: tt.func @bias_row_16
+// CHECK: tensor.pad
+// CHECK: ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [1, 16]>
+// CHECK: linalg.add {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [1, 16]>}
+// CHECK-NOT: logical_shape = [16]
+tt.func @bias_row_16(%in: !tt.ptr<bf16>, %out: !tt.ptr<bf16>) {
+  %ins = tt.splat %in : !tt.ptr<bf16> -> tensor<16x!tt.ptr<bf16>>
+  %x = tt.load %ins : tensor<16x!tt.ptr<bf16>>
+  %e = tensor.empty() : tensor<16xbf16>
+  %y = linalg.add ins(%x, %x : tensor<16xbf16>, tensor<16xbf16>) outs(%e : tensor<16xbf16>) -> tensor<16xbf16>
+  %outs = tt.splat %out : !tt.ptr<bf16> -> tensor<16x!tt.ptr<bf16>>
+  tt.store %outs, %y : tensor<16x!tt.ptr<bf16>>
+  tt.return
+}

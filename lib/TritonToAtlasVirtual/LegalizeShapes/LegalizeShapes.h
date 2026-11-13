@@ -16,12 +16,20 @@
 
 namespace mlir::triton {
 
-// Masks.cpp: reads the load and store masks and tags the ops whose padded
-// lanes need a neutral value. Fills `storePadTags` with the tag of each store,
-// to be moved onto the op that produces the stored value once tiling is done.
-LogicalResult
-tagMaskedBoundaries(ModuleOp module,
-                    DenseMap<Operation *, Attribute> &storePadTags);
+// What a load or store mask proves: its true lanes are the leading box
+// `bounds` (rank-1 or rank-2, like the accessed tensor), and the padded lanes
+// hold `neutral`.
+struct MaskBox {
+  ttatlas::PadNeutral neutral;
+  SmallVector<int64_t> bounds;
+};
+using MaskBoxes = DenseMap<Operation *, MaskBox>;
+
+// Masks.cpp: reads the load and store masks into `boxes`, keyed by the memory
+// op, and rejects a mask that is not a compile-time leading box. Only masks
+// that cut a tile short get an entry. Nothing is tagged yet: a tag belongs to
+// a tile, and the tiles do not exist before tiling.
+LogicalResult readMaskedBoundaries(ModuleOp module, MaskBoxes &boxes);
 
 // Padding.cpp: the pad value a constant stands for (a tile-wide 0, 1, -inf or
 // +inf), or nothing.
@@ -43,9 +51,13 @@ LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
                               linalg::LinalgOp &paddedOp,
                               SmallVectorImpl<Value> &replacements);
 
-// Padding.cpp: moves each store's pad tag onto the op that produces its value.
-LogicalResult
-propagateStorePadTags(const DenseMap<Operation *, Attribute> &storePadTags);
+// Padding.cpp: after tiling, tags every boundary tile that holds padded lanes
+// with its own logical shape (always [rows, cols]; a row is [1, n]), taking the
+// mask boxes and the sub-tile pads of padToAtlasTiles into account. A tile of
+// a load is tagged on the op that yields it (the load, the tensor.pad of a
+// small load, or the extract_slice of a larger one); a tile of a stored tensor
+// on the op that produces it. A full tile has no tag.
+LogicalResult tagBoundaryTiles(ModuleOp module, const MaskBoxes &boxes);
 
 // Tiling.cpp: the MXU policy tag on a matmul.
 bool hasConflictingMxu(Operation *op);
