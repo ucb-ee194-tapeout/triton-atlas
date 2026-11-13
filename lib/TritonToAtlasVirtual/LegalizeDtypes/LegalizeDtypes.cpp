@@ -78,6 +78,31 @@ void privatize(Operation *user, unsigned index) {
   user->setOperand(index, builder.clone(*def)->getResult(0));
 }
 
+// Moves the ttatlas.* tags of `from`, an op about to be erased in favour of
+// `to`, onto the op defining `to`. Pass 4 tags a stored value's defining op
+// with ttatlas.pad, and pass 6 reads it there; when that op is a cast or a
+// pass-through generic this pass erases, the tag must move to the value that
+// replaces it. A tag already on the target wins. Fails, with an error, when
+// ttatlas.pad has nowhere to go (no defining op, or a constant, which the
+// dialect doesn't allow a pad on).
+LogicalResult moveTags(Operation *from, Value to, RewriterBase &rewriter) {
+  Operation *target = to.getDefiningOp();
+  for (NamedAttribute attr : from->getDiscardableAttrs()) {
+    if (!attr.getName().strref().starts_with("ttatlas."))
+      continue;
+    if (!target || isa<arith::ConstantOp>(target)) {
+      if (attr.getName() == tta::kPad)
+        return tta::emitUnsupported(from, "ttatlas.pad can't move to the "
+                                          "value that replaces this op");
+      continue;
+    }
+    if (!target->hasAttr(attr.getName()))
+      rewriter.modifyOpInPlace(
+          target, [&] { target->setAttr(attr.getName(), attr.getValue()); });
+  }
+  return success();
+}
+
 // After each chain's last matmul, one linalg.generic{arith.truncf} from f32 to
 // BF16: the readout marker pass 7 maps to mxu_readout_bf16. Without it nothing
 // marks that point once the BF16 casts are erased: in the MLP the only truncf
@@ -228,7 +253,10 @@ struct RetypeConstant : OpConversionPattern<arith::ConstantOp> {
     Attribute value = toBf16(op.getValue());
     if (!value)
       return failure();
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, cast<TypedAttr>(value));
+    auto retyped = rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+        op, cast<TypedAttr>(value));
+    for (NamedAttribute attr : op->getDiscardableAttrs())
+      retyped->setAttr(attr.getName(), attr.getValue());
     return success();
   }
 };
@@ -244,6 +272,8 @@ struct EraseIdentityCast : OpConversionPattern<CastOp> {
                   ConversionPatternRewriter &rewriter) const override {
     Type type = this->getTypeConverter()->convertType(op.getType());
     if (type != adaptor.getIn().getType())
+      return failure();
+    if (failed(moveTags(op, adaptor.getIn(), rewriter)))
       return failure();
     rewriter.replaceOp(op, adaptor.getIn());
     return success();
@@ -285,10 +315,29 @@ LogicalResult retype(ModuleOp module,
 // erased; linalg's own canonicalization patterns erase it. The greedy driver
 // also folds and erases dead ops elsewhere in the module, which is harmless:
 // the pipeline runs canonicalize right after this pass anyway.
-void eraseIdentityGenerics(ModuleOp module) {
+LogicalResult eraseIdentityGenerics(ModuleOp module) {
+  // Their tags first move to the input's defining op (moveTags), since the
+  // canonicalization pattern drops them with the generic.
+  IRRewriter rewriter(module.getContext());
+  WalkResult moved = module.walk([&](linalg::GenericOp generic) {
+    if (generic.getNumDpsInputs() != 1 || generic->getNumResults() != 1 ||
+        !llvm::all_of(generic.getIndexingMapsArray(),
+                      [](AffineMap map) { return map.isIdentity(); }))
+      return WalkResult::advance();
+    auto yield = cast<linalg::YieldOp>(generic.getBody()->getTerminator());
+    Value input = generic.getDpsInputs()[0];
+    if (yield->getOperand(0) != generic.getBody()->getArgument(0) ||
+        input.getType() != generic->getResult(0).getType())
+      return WalkResult::advance();
+    return failed(moveTags(generic, input, rewriter)) ? WalkResult::interrupt()
+                                                      : WalkResult::advance();
+  });
+  if (moved.wasInterrupted())
+    return failure();
   RewritePatternSet patterns(module.getContext());
   linalg::GenericOp::getCanonicalizationPatterns(patterns, module.getContext());
   (void)applyPatternsGreedily(module, std::move(patterns));
+  return success();
 }
 
 // The precision policy (module tag ttatlas.precision_policy, set from the
@@ -323,9 +372,9 @@ struct LegalizeDtypes : impl::LegalizeDtypesBase<LegalizeDtypes> {
       return signalPassFailure();
     FailureOr<llvm::SmallPtrSet<Operation *, 16>> keep =
         markAccumulators(module);
-    if (failed(keep) || failed(retype(module, *keep)))
+    if (failed(keep) || failed(retype(module, *keep)) ||
+        failed(eraseIdentityGenerics(module)))
       return signalPassFailure();
-    eraseIdentityGenerics(module);
   }
 };
 
