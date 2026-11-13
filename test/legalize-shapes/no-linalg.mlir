@@ -1,7 +1,7 @@
 // RUN: triton-atlas-opt %S/../fixtures/mlp.ttir.mlir --ttatlas-legalize-shapes | FileCheck %s
 
-// Pass 3 is still a placeholder, so this TTIR fixture contains no linalg work
-// for pass 4 to tile. Direct linalg coverage is in legalize-shapes.mlir.
+// Pass 4 run on raw TTIR (pass 3 not run): there is no linalg op to tile, so
+// the kernel comes out unchanged. Tiling coverage is in tiles.mlir.
 
 // CHECK: tt.func public @mlp
 // CHECK: tt.load

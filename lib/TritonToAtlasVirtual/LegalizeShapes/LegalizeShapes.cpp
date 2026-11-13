@@ -32,19 +32,6 @@ namespace mlir::triton {
 
 namespace {
 
-static bool isInsideLinalgBody(Operation *op) {
-  for (Operation *parent = op->getParentOp(); parent;
-       parent = parent->getParentOp())
-    if (parent->getName().getDialectNamespace() == "linalg")
-      return true;
-  return false;
-}
-
-static bool isLinalgCompute(Operation *op) {
-  return op->getName().getDialectNamespace() == "linalg" &&
-         !isInsideLinalgBody(op);
-}
-
 static bool isSupportedStaticDomain(linalg::LinalgOp op) {
   if (op.hasDynamicShape())
     return false;
@@ -80,19 +67,16 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
     bool hadFailure = false;
     SmallVector<Operation *> computeOps;
     module.walk([&](Operation *op) {
-      if (isLinalgCompute(op))
+      // The ops in a linalg body are arith/math, and linalg.yield is no
+      // LinalgOp, so this collects exactly the compute ops.
+      if (isa<linalg::LinalgOp>(op))
         computeOps.push_back(op);
     });
 
     // Validate the whole input before rewriting so an unsupported later op
     // cannot leave a partly legalized module behind.
     for (Operation *op : computeOps) {
-      auto linalgOp = dyn_cast<linalg::LinalgOp>(op);
-      if (!linalgOp) {
-        ttatlas::emitUnsupported(op, "operation does not implement LinalgOp");
-        hadFailure = true;
-        continue;
-      }
+      auto linalgOp = cast<linalg::LinalgOp>(op);
       if (!isSupportedStaticDomain(linalgOp)) {
         ttatlas::emitUnsupported(
             op, "iteration dimensions must be positive and static");
@@ -112,8 +96,7 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       }
       if (!validTensorShapes)
         continue;
-      if (op->getName().getStringRef() == "linalg.matmul" &&
-          hasConflictingMxu(op))
+      if (isa<linalg::MatmulOp>(op) && hasConflictingMxu(op))
         hadFailure = true;
     }
     if (hadFailure) {
@@ -178,7 +161,7 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
         continue;
       }
       auto linalgOp = cast<linalg::LinalgOp>(op);
-      if (op->getName().getStringRef() == "linalg.matmul" && !setMxuZero(op)) {
+      if (isa<linalg::MatmulOp>(op) && !setMxuZero(op)) {
         signalPassFailure();
         return;
       }
@@ -298,8 +281,7 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
     }
 
     module.walk([&](Operation *op) {
-      if (isLinalgCompute(op) &&
-          op->getName().getStringRef() == "linalg.matmul")
+      if (isa<linalg::MatmulOp>(op))
         hadFailure |= !setMxuZero(op);
     });
     if (hadFailure)

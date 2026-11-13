@@ -107,24 +107,29 @@ Atlas hardware facts (tile size, slot size, MXU limits, scale codes, DRAM window
 that depends on the hardware in a way a constant can't hold gets an `atlas-hw:` comment with its source.
 `git grep -n "atlas-hw:\|target::"` lists every place the hardware reaches into the passes.
 
-Pass 4 accepts static rank-1 and rank-2 linalg tensors with positive dimensions. It pads static linalg iteration
-dimensions to multiples of 32 with MLIR's linalg padding transform, then tiles larger operations with MLIR's
-linalg tiling interface. Supported elementwise and matmul operations use zero padding; max reductions use
-negative infinity. Static tile loops are unrolled, so a split-K matmul becomes an explicit chain. Tensor slices
-are fused into their linalg consumers where MLIR supports the pattern. Every matmul is tagged
-`ttatlas.mxu = 0 : i32` (MXU0 is the initial policy).
+Pass 4 (`ttatlas-legalize-shapes`) makes every linalg op one Atlas tile (32x32, or a 32-long row). It works on
+static rank-1 and rank-2 tensors.
+- Padding: a shape that isn't a multiple of 32 is padded with MLIR's `linalg::rewriteAsPaddedOp`. Padded lanes that a
+  reduction reads along a reduced dimension hold its identity (`matchReduction` + `arith::getNeutralElement`: 0 for a
+  sum or matmul K, -inf for max, +inf for min); other padded lanes are cropped later and hold zero.
+- Tiling: MLIR's SCF driver (`scf::tileConsumerAndFuseProducersUsingSCF`) tiles each consumer and fuses its producers,
+  then any op still larger than a tile is tiled again, reductions included, so a matmul's K becomes a chain of 32x32x32
+  matmuls. The tile loops are fully unrolled. Every matmul gets `ttatlas.mxu = 0 : i32` (MXU0 is the initial policy).
+- Masks: a `tt.load`/`tt.store` mask must be a compile-time leading box (`tl.arange(0, 64) < 50`, row or column, any
+  `expand_dims`/`broadcast` form); the shared evaluator in `Support/LaneValues.cpp` decides that. A head mask
+  (`offs > k`) or a runtime bound is rejected.
+- Boundary tags: each memory tile that holds padded lanes gets its own `ttatlas.pad` with its own logical shape, always
+  `[rows, cols]` (a row of n is `[1, n]`), on the op that yields it: the `tt.load`, the `tensor.pad` of a sub-tile load,
+  the `extract_slice` of a larger load, or the producer of a stored tile. The host fills an input tile's padded lanes
+  with the tag's value and crops an output tile.
+- Mask apply: on Atlas only kernel inputs get their padded lanes filled; pass 7 drops in-kernel `tensor.pad`. So when a
+  reduction reads padded lanes that may not hold its identity (they were computed, or the host fill differs), pass 4
+  inserts a `linalg.mul` by a 1/0 tile (sum, matmul K) or a `linalg.add` of a 0/-inf or 0/+inf tile (max, min), marked
+  `ttatlas.mask_apply`; its constant becomes a host-filled mask slot in pass 6. It is exact while the padded lanes are
+  finite (0 * inf is NaN).
 
-For masked `tt.load` and `tt.store`, pass 4 recognizes `slt` comparisons of `tt.make_range` against a scalar
-constant, including `andi` combinations and the usual `expand_dims`/`broadcast` wrappers. The load's explicit
-other value or the stored value's inferred consumer neutral must be zero (add/matmul) or negative infinity
-(max-reduction); the load neutral must agree with its consumers. Once the tiles exist, the pass gives each memory
-boundary tile that holds padded lanes its own `ttatlas.pad` tag with that tile's logical shape, always `[rows, cols]`
-(a row of n is `[1, n]`); a full tile has no tag. A load tile is tagged on the op that yields it: the `tt.load`
-itself, the `tensor.pad` of a load smaller than a tile, or the `extract_slice` of a larger one. A stored tile is
-tagged on the op that produces it. A tile with no real lane is dropped if nothing reads it, else rejected. Dynamic shapes, unsupported mask expressions, and padding whose neutral element cannot be
-established are rejected with an unsupported diagnostic. Partial padded input/output boundaries still require
-Pass 6 packing and cropping support; its current slot placement accepts only full tiles. Irregular compute shapes
-are therefore supported only when their boundaries already satisfy that ABI.
+What later passes still need: pass 6's slot assignment must read these boundary forms (masked accesses, sub-tile
+loads and stores, mask constants), and pass 7 needs a row-min reduction for padded min reductions.
 
 Focused Pass 4 lit coverage is in `test/legalize-shapes/`. Run it with
 `make test T=test/legalize-shapes`; run the stage-contract fixtures separately with
