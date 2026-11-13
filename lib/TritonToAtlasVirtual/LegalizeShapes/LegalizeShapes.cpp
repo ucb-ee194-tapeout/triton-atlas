@@ -160,8 +160,11 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
     };
 
     // Consumers first, so each producer is fused into its consumer's tiles
-    // before it is looked at on its own.
-    for (Operation *op : llvm::reverse(computeOps)) {
+    // before it is looked at on its own. A mask apply put before a reduction
+    // joins the stack, so it is tiled like any other producer.
+    SmallVector<Operation *> pending(computeOps);
+    while (!pending.empty()) {
+      Operation *op = pending.pop_back_val();
       if (!tracker.live.contains(op))
         continue;
       if (llvm::all_of(op->getResults(),
@@ -191,6 +194,15 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
         op = paddedOp.getOperation();
         tracker.live.insert(op);
         linalgOp = paddedOp;
+      }
+      SmallVector<Operation *> masks;
+      if (failed(maskPaddedReductions(rewriter, linalgOp, maskBoxes, masks))) {
+        signalPassFailure();
+        return;
+      }
+      for (Operation *mask : masks) {
+        tracker.live.insert(mask);
+        pending.push_back(mask);
       }
       if (!exceedsTile(op))
         continue;
@@ -255,6 +267,22 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
             GreedyRewriteConfig().enableFolding(false).enableConstantCSE(
                 false)))) {
       module.emitError("atlas: merging tile slices did not converge");
+      signalPassFailure();
+      return;
+    }
+
+    // Each tile slice of a mask constant becomes a tile-sized constant
+    // (canonicalization alone leaves a slice of a non-splat constant). Folding
+    // is on here, and the slice's own canonicalization, so the offsets, still
+    // index arithmetic after unrolling, are static numbers the pattern can
+    // read.
+    RewritePatternSet foldMasks(module.getContext());
+    tensor::ExtractSliceOp::getCanonicalizationPatterns(foldMasks,
+                                                        module.getContext());
+    tensor::populateFoldConstantExtractSlicePatterns(
+        foldMasks, [](tensor::ExtractSliceOp) { return true; });
+    if (failed(applyPatternsGreedily(module, std::move(foldMasks)))) {
+      module.emitError("atlas: folding mask tiles did not converge");
       signalPassFailure();
       return;
     }

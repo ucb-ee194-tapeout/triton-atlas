@@ -46,6 +46,23 @@ std::optional<ttatlas::PadNeutral> operationNeutral(Operation *op,
                                                     ArrayRef<bool> padded = {},
                                                     std::string *why = nullptr);
 
+// MaskApply.cpp: what the host should put in the padded lanes of a masked load
+// (`bounds` are its real lanes): the identity of the first reduction that
+// reads those lanes through ops that keep them (conversions, slices, pads), or
+// nothing when no reduction does.
+std::optional<ttatlas::PadNeutral> hostFill(Value loaded,
+                                            ArrayRef<int64_t> bounds);
+
+// MaskApply.cpp: before the reduction `op` (whole tiles, or already padded to
+// them), puts a mask apply on every input whose padded lanes along a reduced
+// dimension are not guaranteed to hold the reduction's identity: the host's
+// fill of a boundary load that reaches the reduction only through
+// value-preserving ops is guaranteed, anything else is masked. The ops it
+// creates are appended to `created`, so the driver can tile them too.
+LogicalResult maskPaddedReductions(RewriterBase &rewriter, linalg::LinalgOp op,
+                                   const MaskBoxes &boxes,
+                                   SmallVectorImpl<Operation *> &created);
+
 // Padding.cpp: pads `op` up to whole Atlas tiles with its neutral element.
 LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
                               linalg::LinalgOp &paddedOp,

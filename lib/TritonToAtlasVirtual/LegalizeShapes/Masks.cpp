@@ -31,41 +31,6 @@
 
 namespace mlir::triton {
 
-// The pad value the consumers of `value` need in its padded lanes, looking
-// through conversions and slices to the ops that read it.
-static std::optional<ttatlas::PadNeutral> requiredNeutral(Value value,
-                                                          unsigned depth = 0) {
-  if (depth > 12)
-    return std::nullopt;
-  Operation *definition = value.getDefiningOp();
-  if (!definition)
-    return std::nullopt;
-  // What the readers of `value` need: a slice passes the question on to its
-  // own readers, anything else answers for itself.
-  auto readersNeed = [&](Value read) -> std::optional<ttatlas::PadNeutral> {
-    std::optional<ttatlas::PadNeutral> result;
-    for (Operation *user : read.getUsers()) {
-      std::optional<ttatlas::PadNeutral> current =
-          isa<tensor::ExtractSliceOp>(user)
-              ? requiredNeutral(user->getResult(0), depth + 1)
-              : operationNeutral(user);
-      if (!current || (result && *result != *current))
-        return std::nullopt;
-      result = current;
-    }
-    return result;
-  };
-  if (isa<arith::TruncFOp, arith::ExtFOp, FpToFpOp>(definition))
-    return requiredNeutral(definition->getOperand(0), depth + 1);
-  if (isa<tensor::ExtractSliceOp>(definition))
-    return readersNeed(definition->getResult(0));
-  if (isa<tensor::InsertSliceOp>(definition))
-    return requiredNeutral(definition->getOperand(0), depth + 1);
-  if (isa<LoadOp>(definition))
-    return readersNeed(value);
-  return operationNeutral(definition);
-}
-
 LogicalResult readMaskedBoundaries(ModuleOp module, MaskBoxes &boxes) {
   bool failed = false;
   module.walk([&](Operation *op) {
@@ -99,7 +64,11 @@ LogicalResult readMaskedBoundaries(ModuleOp module, MaskBoxes &boxes) {
     if (ArrayRef<int64_t>(*bounds) == tensor.getShape())
       return;
 
-    std::optional<ttatlas::PadNeutral> neutral;
+    // The host's fill of a load's padded lanes: the identity of the reductions
+    // that read them unchanged, else `other` when it is a fill the host can
+    // write, else zero. A store's padded lanes are cropped by the host, never
+    // written, so its value needs no neutral (zero).
+    ttatlas::PadNeutral neutral = ttatlas::PadNeutral::zero;
     if (load) {
       if (!load.getOther()) {
         ttatlas::emitUnsupported(
@@ -107,27 +76,13 @@ LogicalResult readMaskedBoundaries(ModuleOp module, MaskBoxes &boxes) {
         failed = true;
         return;
       }
-      neutral = constantNeutral(load.getOther());
-    } else {
-      neutral = requiredNeutral(value);
+      if (std::optional<ttatlas::PadNeutral> fill = hostFill(value, *bounds))
+        neutral = *fill;
+      else if (std::optional<ttatlas::PadNeutral> other =
+                   constantNeutral(load.getOther()))
+        neutral = *other;
     }
-    if (!neutral) {
-      ttatlas::emitUnsupported(
-          op, "masked padded value has no supported neutral element");
-      failed = true;
-      return;
-    }
-    if (load) {
-      std::optional<ttatlas::PadNeutral> consumerNeutral =
-          requiredNeutral(value);
-      if (!consumerNeutral || *consumerNeutral != *neutral) {
-        ttatlas::emitUnsupported(
-            op, "masked load neutral element does not match its consumer");
-        failed = true;
-        return;
-      }
-    }
-    boxes[op] = {*neutral, *bounds};
+    boxes[op] = {neutral, *bounds};
     ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
                                 "recognize compile-time edge mask");
   });

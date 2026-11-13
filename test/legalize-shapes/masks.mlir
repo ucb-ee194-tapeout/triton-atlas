@@ -61,9 +61,15 @@ tt.func @no_other(%p: !tt.ptr<bf16>) {
 // -----
 
 // A masked load whose padded lanes change before they are reduced: other = 0 matches the add's neutral, but x + 1.0
-// turns each padded lane into 1, and the row sum then counts them. Pass 4 must reject this (or re-mask before the sum),
-// not tag the load as padded with zero.
+// turns each padded lane into 1, and the row sum then counts them. Pass 4 re-masks before the sum, so it does not:
+// not tag the load as padded with zero. Only kernel inputs get their padded lanes filled, so the row sum reads a mask
+// apply: x * M, with M = 1 on the 16 real columns and 0 on the padded ones.
 #id = affine_map<(d0, d1) -> (d0, d1)>
+// CHECK-LABEL: tt.func @padded_lanes_change_before_sum
+// CHECK: tt.load {{.*}}ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [32, 16]>
+// CHECK: linalg.generic
+// CHECK: %[[MASKED:.*]] = linalg.mul ins(%{{.*}}, %{{.*}} : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK: linalg.reduce ins(%[[MASKED]] : tensor<32x32xf32>)
 tt.func @padded_lanes_change_before_sum(%ptr: !tt.ptr<f32>) -> tensor<32xf32> {
   %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
   %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
@@ -73,7 +79,6 @@ tt.func @padded_lanes_change_before_sum(%ptr: !tt.ptr<f32>) -> tensor<32xf32> {
   %col_mask = tt.expand_dims %cmp {axis = 0 : i32} : tensor<32xi1> -> tensor<1x32xi1>
   %mask = tt.broadcast %col_mask : tensor<1x32xi1> -> tensor<32x32xi1>
   %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
-  // expected-error @below {{masked load}}
   %x = tt.load %ptrs, %mask, %zero : tensor<32x32x!tt.ptr<f32>>
   %one = arith.constant 1.0 : f32
   %e = tensor.empty() : tensor<32x32xf32>

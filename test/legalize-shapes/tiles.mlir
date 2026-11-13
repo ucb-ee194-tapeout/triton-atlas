@@ -160,3 +160,54 @@ tt.func @bias_row_16(%in: !tt.ptr<bf16>, %out: !tt.ptr<bf16>) {
   tt.store %outs, %y : tensor<16x!tt.ptr<bf16>>
   tt.return
 }
+
+// -----
+
+// Padded lanes that an op changed: a 32x40 value through exp, then a row sum over the 40 columns. The host fills only a
+// kernel input, so the sum cannot count on the zeros that padding wrote after exp (exp(0) is 1 on the chip): it reads
+// the padded value times a constant 1/0 mask. Tiling cuts the constant into one tile per column tile.
+#id = affine_map<(d0, d1) -> (d0, d1)>
+// CHECK-LABEL: func.func @exp_then_row_sum_40
+// CHECK-DAG: %[[REAL:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf32>
+// CHECK-DAG: %[[EDGE:.*]] = arith.constant dense<"{{.*}}"> : tensor<32x32xf32>
+// CHECK: math.exp
+// CHECK: linalg.mul ins(%{{.*}}, %[[REAL]] : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK: linalg.mul ins(%{{.*}}, %[[EDGE]] : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK-NOT: linalg.mul
+func.func @exp_then_row_sum_40(%x: tensor<32x40xf32>) -> tensor<32xf32> {
+  %e = tensor.empty() : tensor<32x40xf32>
+  %exp = linalg.generic {indexing_maps = [#id, #id], iterator_types = ["parallel", "parallel"]}
+      ins(%x : tensor<32x40xf32>) outs(%e : tensor<32x40xf32>) {
+  ^bb0(%in: f32, %out: f32):
+    %v = math.exp %in : f32
+    linalg.yield %v : f32
+  } -> tensor<32x40xf32>
+  %zero = arith.constant 0.0 : f32
+  %empty = tensor.empty() : tensor<32xf32>
+  %init = linalg.fill ins(%zero : f32) outs(%empty : tensor<32xf32>) -> tensor<32xf32>
+  %r = linalg.reduce ins(%exp : tensor<32x40xf32>) outs(%init : tensor<32xf32>) dimensions = [1]
+  (%a: f32, %b: f32) {
+    %s = arith.addf %a, %b : f32
+    linalg.yield %s : f32
+  }
+  return %r : tensor<32xf32>
+}
+
+// -----
+
+// A row max straight from the input needs no mask: the host fills the padded columns with -inf (the tag), and nothing
+// between the input and the max changes them.
+// CHECK-LABEL: func.func @row_max_40_from_input
+// CHECK-NOT: linalg.mul
+// CHECK-NOT: linalg.add
+func.func @row_max_40_from_input(%x: tensor<32x40xf32>) -> tensor<32xf32> {
+  %ninf = arith.constant 0xFF800000 : f32
+  %empty = tensor.empty() : tensor<32xf32>
+  %init = linalg.fill ins(%ninf : f32) outs(%empty : tensor<32xf32>) -> tensor<32xf32>
+  %r = linalg.reduce ins(%x : tensor<32x40xf32>) outs(%init : tensor<32xf32>) dimensions = [1]
+  (%a: f32, %b: f32) {
+    %m = arith.maxnumf %a, %b : f32
+    linalg.yield %m : f32
+  }
+  return %r : tensor<32xf32>
+}
