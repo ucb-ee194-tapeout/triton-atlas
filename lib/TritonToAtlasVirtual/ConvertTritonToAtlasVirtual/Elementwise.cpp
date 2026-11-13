@@ -6,9 +6,11 @@
 #include "TTAtlas/TTAtlas.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -122,6 +124,23 @@ struct EraseDeadTensorOp : ConversionPattern {
   }
 };
 
+// A value that already is a physically broadcast tile: a row reduction's result
+// (virtual_vpu_reduce fills every row with it) or a 1x32 bias row (the host
+// repeats it over the rows), found through the ops that keep the tile.
+static bool isBroadcastSource(Value value, unsigned depth = 0) {
+  Operation *definition = value.getDefiningOp();
+  if (!definition || depth > 8)
+    return false;
+  if (auto slot = definition->getAttrOfType<ttatlas::SlotAttr>(ttatlas::kSlot))
+    return slot.getRole() == ttatlas::SlotRole::bias_bf16;
+  if (definition->getName().getStringRef() == "linalg.reduce")
+    return true;
+  if (isa<arith::TruncFOp, arith::ExtFOp>(definition) &&
+      definition->getNumOperands() == 1)
+    return isBroadcastSource(definition->getOperand(0), depth + 1);
+  return false;
+}
+
 struct EraseTileBroadcast : ConversionPattern {
   EraseTileBroadcast(const TypeConverter &converter, MLIRContext *context,
                      StringRef rootName)
@@ -135,8 +154,44 @@ struct EraseTileBroadcast : ConversionPattern {
         !isa<atlas::VirtualBF16Type>(
             getTypeConverter()->convertType(op->getResult(0).getType())))
       return failure();
+    // The tile is only repeated along the broadcast dimension in the hardware
+    // tile when its source was already laid out that way.
+    if (!isBroadcastSource(op->getOperand(0)))
+      return ttatlas::emitUnsupported(
+          op, "a broadcast is lowered only for a row reduction's result or a "
+              "bias row, which are already laid out across the tile");
     rewriter.replaceOp(op, operands.front());
     return success();
+  }
+};
+
+// An op with no Atlas lowering yet: say so, with its name, rather than leave
+// the whole kernel 'failed to legalize'.
+struct RejectUnlowered : ConversionPattern {
+  RejectUnlowered(const TypeConverter &converter, MLIRContext *context)
+      : ConversionPattern(converter, MatchAnyOpTypeTag(), PatternBenefit(0),
+                          context) {}
+
+  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value>,
+                                ConversionPatternRewriter &) const override {
+    StringRef dialect = op->getName().getDialectNamespace();
+    if (dialect != "linalg" && dialect != "tt" && dialect != "scf" &&
+        dialect != "math" && dialect != "tensor")
+      return failure();
+    // Ops with their own patterns report their own reasons.
+    if (isa<FuncOp, LoadOp, StoreOp, linalg::GenericOp, linalg::ReduceOp,
+            linalg::MatmulOp, linalg::BroadcastOp, linalg::FillOp,
+            linalg::YieldOp, tensor::EmptyOp, tensor::PadOp,
+            tensor::ExtractSliceOp, tensor::InsertSliceOp,
+            tensor::ExpandShapeOp>(op))
+      return failure();
+    if (op->hasAttr(ttatlas::kMaskApply))
+      return ttatlas::emitUnsupported(
+          op, "a ttatlas.mask_apply needs its mask tile as a slot, which "
+              "pass 6 does not assign yet");
+    return ttatlas::emitUnsupported(op,
+                                    Twine("pass 7 has no Atlas lowering for ") +
+                                        op->getName().getStringRef() + " yet");
   }
 };
 
@@ -152,6 +207,17 @@ struct ConvertGeneric : ConversionPattern {
         op->getNumResults() != 1 || op->getNumOperands() < 2)
       return failure();
 
+    auto generic = cast<linalg::GenericOp>(op);
+    if (!llvm::all_of(generic.getIndexingMapsArray(),
+                      [](AffineMap map) { return map.isIdentity(); }) ||
+        !llvm::all_of(generic.getIteratorTypesArray(),
+                      [](utils::IteratorType type) {
+                        return type == utils::IteratorType::parallel;
+                      }))
+      return ttatlas::emitUnsupported(
+          op, "pass 7 lowers only pointwise generics: every indexing map "
+              "must be the identity and every loop parallel (a broadcast or "
+              "transposed operand has no lowering yet)");
     Block &body = op->getRegion(0).front();
     Operation *compute = nullptr;
     for (Operation &nested : body) {
@@ -257,6 +323,7 @@ struct ConvertGeneric : ConversionPattern {
 void populateElementwisePatterns(TypeConverter &typeConverter,
                                  RewritePatternSet &patterns) {
   patterns.add<ConvertGeneric>(typeConverter, patterns.getContext());
+  patterns.add<RejectUnlowered>(typeConverter, patterns.getContext());
   patterns.add<EraseTileCast>(typeConverter, patterns.getContext(),
                               "arith.truncf");
   patterns.add<EraseTileCast>(typeConverter, patterns.getContext(),
