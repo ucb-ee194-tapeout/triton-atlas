@@ -75,14 +75,15 @@ struct ConvertTritonToAtlasVirtual
         return user->getName().getDialectNamespace() == "linalg";
       });
     });
+    // A fill is legal while only matmul accumulators read it (several chains
+    // can share one after CSE); it is swept when nothing reads it any more.
     target.addDynamicallyLegalOp<linalg::FillOp>([](linalg::FillOp fill) {
-      return fill->getNumResults() == 1 && fill->getResult(0).hasOneUse() &&
-             fill->getResult(0)
-                     .use_begin()
-                     ->getOwner()
-                     ->getName()
-                     .getStringRef() == "linalg.matmul" &&
-             fill->getResult(0).use_begin()->getOperandNumber() == 2;
+      return fill->getNumResults() == 1 &&
+             llvm::all_of(fill->getResult(0).getUses(), [](OpOperand &use) {
+               return use.getOwner()->getName().getStringRef() ==
+                          "linalg.matmul" &&
+                      use.getOperandNumber() == 2;
+             });
     });
     // The region bodies are erased together with the enclosing linalg op.
     // Keep their linalg.yield syntax legal until that enclosing rewrite runs.

@@ -90,26 +90,6 @@ static bool isZeroFill(Operation *fill) {
   return false;
 }
 
-static void eraseZeroFill(Operation *fill,
-                          ConversionPatternRewriter &rewriter) {
-  if (fill->getNumResults() != 1)
-    return;
-  Operation *scalar = fill->getOperand(0).getDefiningOp();
-  Value destination = fill->getOperand(1);
-  // Replace the fill result before erasing it.  In a conversion rewrite its
-  // matmul consumer can still be present in the rewriter transaction, even
-  // though it has already been replaced by the virtual MXU op.
-  rewriter.replaceOp(fill, destination);
-  if (Operation *empty = destination.getDefiningOp();
-      empty && empty->getName().getStringRef() == "tensor.empty" &&
-      empty->getResult(0).use_empty())
-    rewriter.eraseOp(empty);
-  if (scalar && scalar->getName().getStringRef() == "arith.constant" &&
-      llvm::all_of(scalar->getResults(),
-                   [](Value result) { return result.use_empty(); }))
-    rewriter.eraseOp(scalar);
-}
-
 static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
                                    ConversionPatternRewriter &rewriter) {
   if (matmul->getNumOperands() != 3 || operands.size() != 3 ||
@@ -168,7 +148,8 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
           builder.getNamedAttr("unit", builder.getI32IntegerAttr(*unit))});
 
   rewriter.replaceOp(matmul, lowered->getResults());
-  eraseZeroFill(fill, rewriter);
+  // The zero fill stays: other matmuls may share it (CSE merges equal fills),
+  // and the driver sweeps it once nothing reads it.
   return success();
 }
 
@@ -347,9 +328,6 @@ static LogicalResult lowerKChain(Operation *root, ArrayRef<Operation *> chain,
   for (Operation *matmul : llvm::reverse(chain.drop_back()))
     rewriter.eraseOp(matmul);
 
-  Operation *fill = root->getOperand(2).getDefiningOp();
-  if (fill && fill->getName().getStringRef() == "linalg.fill")
-    eraseZeroFill(fill, rewriter);
   return success();
 }
 
