@@ -53,3 +53,25 @@ tt.func @masked_store(%p: !tt.ptr<bf16>, %x: tensor<32xbf16>) {
   tt.store %a, %x, %m : tensor<32x!tt.ptr<bf16>>
   tt.return
 }
+
+// -----
+
+// A compare on a constant-trip loop's counter (an Inductor-style tail test, k < 100) is a mask too: rejected until
+// pass 4 lowers masks, even though the counter becomes a constant once pass 2 unrolls the loop.
+tt.func @loop_counter(%p: !tt.ptr<bf16>) {
+  %r = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  %ps = tt.splat %p : !tt.ptr<bf16> -> tensor<32x!tt.ptr<bf16>>
+  %a = tt.addptr %ps, %r : tensor<32x!tt.ptr<bf16>>, tensor<32xi32>
+  %c0 = arith.constant 0 : i32
+  %c4 = arith.constant 4 : i32
+  %c1 = arith.constant 1 : i32
+  %c100 = arith.constant dense<100> : tensor<32xi32>
+  scf.for %k = %c0 to %c4 step %c1 : i32 {
+    %ks = tt.splat %k : i32 -> tensor<32xi32>
+    // expected-error @below {{atlas: unsupported arith.cmpi: no lowering yet: masks; pass 4 doesn't turn them into padding yet}}
+    // expected-error @below {{failed to legalize operation 'arith.cmpi' that was explicitly marked illegal}}
+    %m = arith.cmpi slt, %ks, %c100 : tensor<32xi32>
+    %v = tt.load %a, %m : tensor<32x!tt.ptr<bf16>>
+  }
+  tt.return
+}

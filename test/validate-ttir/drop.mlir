@@ -5,6 +5,7 @@
 // after pass 2), not rejected as a mask. The rest of the kernel is kept.
 
 // CHECK-LABEL: tt.func @dropped
+// CHECK: arith.cmpi sge
 // CHECK-NOT: gpu.barrier
 // CHECK-NOT: llvm.intr.assume
 // CHECK: arith.addf
