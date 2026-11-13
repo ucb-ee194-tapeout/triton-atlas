@@ -119,15 +119,32 @@ void tagChain(MutableArrayRef<DotOp> chain, int32_t id) {
                  tta::KChainAttr::get(dot.getContext(), id, int32_t(pos), len));
 }
 
+// Whether to keep the bias folded: the pass option or the module tag
+// ttatlas.fold_bias_into_dot (set from Triton's AtlasOptions) turns it on;
+// both default to off.
+bool foldBias(ModuleOp module, bool option) {
+  auto tag = module->getAttrOfType<BoolAttr>(tta::kFoldBiasIntoDot);
+  return option || (tag && tag.getValue());
+}
+
 struct Normalize : impl::NormalizeBase<Normalize> {
+  using NormalizeBase::NormalizeBase; // takes NormalizeOptions
+                                      // (fold-bias-into-dot)
+
   void runOnOperation() override {
     // Unroll first: a K loop's dots form a chain only once unrolled, and the
     // bias unfold must see the whole chain.
     if (failed(unrollLoops(getOperation())))
       return signalPassFailure();
+    bool fold = foldBias(getOperation(), foldBiasIntoDot);
     int32_t id = 0;
     for (SmallVector<DotOp> &chain : findChains(getOperation())) {
-      unfoldBias(chain);
+      // Folding keeps the bias as the first dot's accumulator: Atlas
+      // then loads it into the MXU accumulator (VMATPUSH.ABF16, atlas-mlir's
+      // virtual_mxu_load_acc_bf16) instead of adding it on the VPU after the
+      // chain. Untested on hardware, so off by default (Normalize.td).
+      if (!fold)
+        unfoldBias(chain);
       if (chain.size() > 1)
         tagChain(chain, id++);
     }
