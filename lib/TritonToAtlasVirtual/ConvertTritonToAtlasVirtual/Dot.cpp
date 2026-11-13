@@ -6,15 +6,17 @@
 #include "Atlas/AtlasTypes.h"
 #include "TTAtlas/AtlasTarget.h"
 #include "TTAtlas/TTAtlas.h"
-#include "llvm/ADT/APFloat.h"
-#include "llvm/ADT/APInt.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <optional>
 
@@ -28,8 +30,8 @@ static std::optional<Role> getWeightRole(Value value) {
   while (Operation *definition = value.getDefiningOp()) {
     if (!seen.insert(definition).second)
       return std::nullopt;
-    if (auto slot = definition->getAttrOfType<ttatlas::SlotAttr>(
-            ttatlas::kSlot))
+    if (auto slot =
+            definition->getAttrOfType<ttatlas::SlotAttr>(ttatlas::kSlot))
       return slot.getRole();
     StringRef name = definition->getName().getStringRef();
     if ((name == "linalg.transpose" || name == "tensor.extract_slice" ||
@@ -103,14 +105,12 @@ static void eraseZeroFill(Operation *fill,
       empty->getResult(0).use_empty())
     rewriter.eraseOp(empty);
   if (scalar && scalar->getName().getStringRef() == "arith.constant" &&
-      llvm::all_of(scalar->getResults(), [](Value result) {
-        return result.use_empty();
-      }))
+      llvm::all_of(scalar->getResults(),
+                   [](Value result) { return result.use_empty(); }))
     rewriter.eraseOp(scalar);
 }
 
-static LogicalResult replaceMatmul(Operation *matmul,
-                                   ArrayRef<Value> operands,
+static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
                                    ConversionPatternRewriter &rewriter) {
   if (matmul->getNumOperands() != 3 || operands.size() != 3 ||
       matmul->getNumResults() != 1)
@@ -121,14 +121,12 @@ static LogicalResult replaceMatmul(Operation *matmul,
   if (failed(unit))
     return failure();
   std::optional<Role> role = getWeightRole(matmul->getOperand(1));
-  if (!role || (*role != Role::weight_fp8_nk &&
-                *role != Role::weight_fp8_kn))
+  if (!role || (*role != Role::weight_fp8_nk && *role != Role::weight_fp8_kn))
     return ttatlas::emitUnsupported(
         matmul, "matmul weight requires a weight_fp8_nk or weight_fp8_kn slot");
   if (*role == Role::weight_fp8_kn)
     if (Operation *transpose = matmul->getOperand(1).getDefiningOp();
-        transpose &&
-        transpose->getName().getStringRef() == "linalg.transpose")
+        transpose && transpose->getName().getStringRef() == "linalg.transpose")
       return ttatlas::emitUnsupported(
           matmul, "weight_fp8_kn must not have a linalg.transpose producer");
   auto activationRole = getWeightRole(matmul->getOperand(0));
@@ -151,14 +149,14 @@ static LogicalResult replaceMatmul(Operation *matmul,
   Value weight = operands[1];
   if (*role == Role::weight_fp8_nk)
     if (Operation *transpose = matmul->getOperand(1).getDefiningOp();
-        transpose &&
-        transpose->getName().getStringRef() == "linalg.transpose")
+        transpose && transpose->getName().getStringRef() == "linalg.transpose")
       weight = rewriter.getRemappedValue(transpose->getOperand(0));
   if (*role == Role::weight_fp8_kn) {
     Type fp8 = atlas::VirtualFP8Type::get(matmul->getContext());
-    Operation *transpose = createAtlasOp(
-        rewriter, matmul->getLoc(), atlas::VirtualXLUTransposeOp::getOperationName(),
-        ValueRange{weight}, TypeRange{fp8});
+    Operation *transpose =
+        createAtlasOp(rewriter, matmul->getLoc(),
+                      atlas::VirtualXLUTransposeOp::getOperationName(),
+                      ValueRange{weight}, TypeRange{fp8});
     weight = transpose->getResult(0);
   }
   Type bf16 = atlas::VirtualBF16Type::get(matmul->getContext());
@@ -199,6 +197,17 @@ static SmallVector<Operation *> collectKChain(Operation *root) {
   return chain;
 }
 
+// A one-input, all-parallel linalg.generic whose body only truncates its f32
+// input to BF16: pass 5's marker of where a matmul chain is read out.
+static bool isReadoutMarker(Operation *op) {
+  auto generic = dyn_cast<linalg::GenericOp>(op);
+  if (!generic || generic.getNumDpsInputs() != 1 ||
+      generic.getNumDpsInits() != 1)
+    return false;
+  Block &body = generic.getRegion().front();
+  return body.getOperations().size() == 2 && isa<arith::TruncFOp>(body.front());
+}
+
 static Value latestStateBefore(Operation *anchor) {
   Value state;
   for (Operation &op : *anchor->getBlock()) {
@@ -221,26 +230,24 @@ static LogicalResult lowerKChain(Operation *root, ArrayRef<Operation *> chain,
       return failure();
     units.push_back(*unit);
     auto role = getWeightRole(matmul->getOperand(1));
-    if (!role || (*role != Role::weight_fp8_nk &&
-                  *role != Role::weight_fp8_kn))
+    if (!role || (*role != Role::weight_fp8_nk && *role != Role::weight_fp8_kn))
       return ttatlas::emitUnsupported(
-          matmul, "K-chain weight requires a weight_fp8_nk or weight_fp8_kn slot");
+          matmul,
+          "K-chain weight requires a weight_fp8_nk or weight_fp8_kn slot");
     roles.push_back(*role);
     if (*role == Role::weight_fp8_kn)
       if (Operation *transpose = matmul->getOperand(1).getDefiningOp();
           transpose &&
           transpose->getName().getStringRef() == "linalg.transpose")
         return ttatlas::emitUnsupported(
-            matmul,
-            "weight_fp8_kn must not have a linalg.transpose producer");
+            matmul, "weight_fp8_kn must not have a linalg.transpose producer");
     auto activationRole = getWeightRole(matmul->getOperand(0));
     if (!activationRole || *activationRole != Role::activation_fp8)
       return ttatlas::emitUnsupported(
           matmul, "K-chain left operand requires an activation_fp8 slot");
   }
-  if (!llvm::all_of(llvm::drop_begin(units), [&](int32_t unit) {
-        return unit == units.front();
-      }))
+  if (!llvm::all_of(llvm::drop_begin(units),
+                    [&](int32_t unit) { return unit == units.front(); }))
     return ttatlas::emitUnsupported(root,
                                     "one K chain must use a single MXU unit");
 
@@ -301,15 +308,15 @@ static LogicalResult lowerKChain(Operation *root, ArrayRef<Operation *> chain,
           rewriter, matmul->getLoc(),
           atlas::VirtualMXUResetOp::getOperationName(),
           ValueRange{state, activation, loadWeight->getResult(1)},
-          TypeRange{stateType, atlas::VirtualMXUAccType::get(context,
-                                                              units[index])});
+          TypeRange{stateType,
+                    atlas::VirtualMXUAccType::get(context, units[index])});
     } else {
       mxu = createAtlasOp(
           rewriter, matmul->getLoc(),
           atlas::VirtualMXUAccumulateOp::getOperationName(),
           ValueRange{state, activation, loadWeight->getResult(1), accumulator},
-          TypeRange{stateType, atlas::VirtualMXUAccType::get(context,
-                                                              units[index])});
+          TypeRange{stateType,
+                    atlas::VirtualMXUAccType::get(context, units[index])});
     }
     state = mxu->getResult(0);
     accumulator = mxu->getResult(1);
@@ -318,17 +325,20 @@ static LogicalResult lowerKChain(Operation *root, ArrayRef<Operation *> chain,
   Operation *readout = createAtlasOp(
       rewriter, chain.back()->getLoc(),
       atlas::VirtualMXUReadoutBF16Op::getOperationName(),
-      ValueRange{state, accumulator},
-      TypeRange{stateType, bf16Type});
+      ValueRange{state, accumulator}, TypeRange{stateType, bf16Type});
   rewriter.modifyOpInPlace(successor, [&] {
     successor->setOperand(successorUse.getOperandNumber(),
                           readout->getResult(0));
   });
 
   Operation *terminal = chain.back();
+  // The readout marker pass 5 puts after a chain (a linalg.generic that only
+  // narrows f32 to BF16), or a bare tile truncf, is the value this readout
+  // produces.
   SmallVector<Operation *> truncs;
   for (Operation *user : terminal->getResult(0).getUsers())
-    if (user->getName().getStringRef() == "arith.truncf" &&
+    if ((user->getName().getStringRef() == "arith.truncf" ||
+         isReadoutMarker(user)) &&
         user->getNumResults() == 1)
       truncs.push_back(user);
   for (Operation *trunc : truncs)
@@ -343,44 +353,14 @@ static LogicalResult lowerKChain(Operation *root, ArrayRef<Operation *> chain,
   return success();
 }
 
-// A linalg.transpose is redundant for the MXU's NK representation. Pass 6 put
-// the role on its source load/slice, so inspect that source before dropping it.
-struct RemoveNKTranspose : ConversionPattern {
-  RemoveNKTranspose(const TypeConverter &converter, MLIRContext *context)
-      : ConversionPattern(converter, "linalg.transpose", PatternBenefit(2),
-                          context) {}
-
-  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const override {
-    if (op->getNumOperands() < 2 || op->getNumResults() != 1 ||
-        operands.empty())
-      return failure();
-    if (!llvm::all_of(op->getResult(0).getUses(), [&](OpOperand &use) {
-          return use.getOwner()->getName().getStringRef() == "linalg.matmul" &&
-                 use.getOperandNumber() == 1;
-        }))
-      return failure();
-    auto role = getWeightRole(op->getOperand(0));
-    if (!role || *role != Role::weight_fp8_nk)
-      return failure();
-
-    Value destination = op->getOperand(1);
-    rewriter.replaceOp(op, operands.front());
-    if (Operation *empty = destination.getDefiningOp();
-        empty && empty->getName().getStringRef() == "tensor.empty" &&
-        empty->getResult(0).use_empty())
-      rewriter.eraseOp(empty);
-    return success();
-  }
-};
-
 struct ConvertMatmul : ConversionPattern {
   ConvertMatmul(const TypeConverter &converter, MLIRContext *context)
       : ConversionPattern(converter, "linalg.matmul", PatternBenefit(1),
                           context) {}
 
-  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
     // K chains are handled separately below; a non-root member waits for its
     // first matmul, which owns the whole structurally matched chain.
     if (op->getNumOperands() < 3)
@@ -403,10 +383,40 @@ struct ConvertMatmul : ConversionPattern {
 
 } // namespace
 
+// A linalg.transpose of a weight_fp8_nk tile is redundant: the MXU takes the NK
+// layout as it is. Pass 6 put the role on the source load. Done before the
+// conversion, since the boundary conversion feeds the cloned ops virtual
+// tiles, which a transpose's folding (tried before any pattern) cannot read.
+void eraseNKTransposes(ModuleOp module) {
+  SmallVector<Operation *> transposes;
+  module.walk([&](Operation *op) {
+    if (op->getName().getStringRef() != "linalg.transpose" ||
+        op->getNumOperands() < 2 || op->getNumResults() != 1)
+      return;
+    auto permutation = op->getAttrOfType<DenseI64ArrayAttr>("permutation");
+    auto role = getWeightRole(op->getOperand(0));
+    if (permutation && permutation.asArrayRef() == ArrayRef<int64_t>{1, 0} &&
+        role && *role == Role::weight_fp8_nk &&
+        llvm::all_of(op->getResult(0).getUses(), [](OpOperand &use) {
+          return use.getOwner()->getName().getStringRef() == "linalg.matmul" &&
+                 use.getOperandNumber() == 1;
+        }))
+      transposes.push_back(op);
+  });
+  for (Operation *op : transposes) {
+    Value destination = op->getOperand(1);
+    op->getResult(0).replaceAllUsesWith(op->getOperand(0));
+    op->erase();
+    if (Operation *empty = destination.getDefiningOp();
+        empty && empty->getName().getStringRef() == "tensor.empty" &&
+        empty->use_empty())
+      empty->erase();
+  }
+}
+
 void populateDotPatterns(TypeConverter &typeConverter,
                          RewritePatternSet &patterns) {
-  patterns.add<RemoveNKTranspose, ConvertMatmul>(typeConverter,
-                                                 patterns.getContext());
+  patterns.add<ConvertMatmul>(typeConverter, patterns.getContext());
 }
 
 } // namespace mlir::triton

@@ -3,6 +3,7 @@
 
 #include "Atlas/AtlasOps.h"
 #include "Atlas/AtlasTypes.h"
+#include "TTAtlas/TTAtlas.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -35,8 +36,7 @@ static bool isZeroConstant(Value value) {
   if (auto floating = dyn_cast_or_null<FloatAttr>(attribute))
     return floating.getValue().isZero();
   if (auto dense = dyn_cast_or_null<DenseElementsAttr>(attribute))
-    return dense.isSplat() &&
-           dense.getSplatValue<llvm::APFloat>().isZero();
+    return dense.isSplat() && dense.getSplatValue<llvm::APFloat>().isZero();
   return false;
 }
 
@@ -70,9 +70,8 @@ static SmallVector<Operation *> collectInputConstants(Operation *op) {
 static void eraseDeadConstants(ArrayRef<Operation *> constants,
                                ConversionPatternRewriter &rewriter) {
   for (Operation *constant : constants)
-    if (llvm::all_of(constant->getResults(), [](Value result) {
-          return result.use_empty();
-        }))
+    if (llvm::all_of(constant->getResults(),
+                     [](Value result) { return result.use_empty(); }))
       rewriter.eraseOp(constant);
 }
 
@@ -94,12 +93,13 @@ struct EraseTileCast : ConversionPattern {
                 StringRef rootName)
       : ConversionPattern(converter, rootName, PatternBenefit(1), context) {}
 
-  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
     if (op->getNumResults() != 1 || operands.size() != 1 ||
         !isa<atlas::VirtualBF16Type>(operands.front().getType()) ||
-        !isa<atlas::VirtualBF16Type>(getTypeConverter()->convertType(
-            op->getResult(0).getType())))
+        !isa<atlas::VirtualBF16Type>(
+            getTypeConverter()->convertType(op->getResult(0).getType())))
       return failure();
     rewriter.replaceOp(op, operands.front());
     return success();
@@ -111,8 +111,9 @@ struct EraseDeadTensorOp : ConversionPattern {
                     StringRef rootName)
       : ConversionPattern(converter, rootName, PatternBenefit(1), context) {}
 
-  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value>,
-                                ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value>,
+                  ConversionPatternRewriter &rewriter) const override {
     if (llvm::any_of(op->getResults(),
                      [](Value result) { return !result.use_empty(); }))
       return failure();
@@ -126,8 +127,9 @@ struct EraseTileBroadcast : ConversionPattern {
                      StringRef rootName)
       : ConversionPattern(converter, rootName, PatternBenefit(2), context) {}
 
-  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
     if (op->getNumResults() != 1 || operands.empty() ||
         !isa<atlas::VirtualBF16Type>(operands.front().getType()) ||
         !isa<atlas::VirtualBF16Type>(
@@ -143,8 +145,9 @@ struct ConvertGeneric : ConversionPattern {
       : ConversionPattern(converter, "linalg.generic", PatternBenefit(1),
                           context) {}
 
-  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
     if (op->getNumRegions() != 1 || op->getRegion(0).empty() ||
         op->getNumResults() != 1 || op->getNumOperands() < 2)
       return failure();
@@ -156,14 +159,36 @@ struct ConvertGeneric : ConversionPattern {
           nested.getName().getStringRef() == "arith.constant")
         continue;
       if (compute)
-        return failure();
+        return ttatlas::emitUnsupported(
+            op, "a linalg.generic with several operations in its body has no "
+                "Atlas lowering yet; pass 7 lowers one pointwise operation "
+                "per generic");
       compute = &nested;
     }
-    if (!compute || compute->getNumResults() != 1 ||
-        compute->getNumOperands() != 2)
+    if (!compute || compute->getNumResults() != 1)
       return failure();
 
     unsigned inputCount = op->getNumOperands() - op->getNumResults();
+
+    // A dtype conversion between tile values (pass 5's readout marker, a
+    // widening or narrowing cast): every tile is BF16 on the VPU, so it keeps
+    // the value it reads.
+    if (isa<arith::TruncFOp, arith::ExtFOp>(compute)) {
+      auto input = dyn_cast<BlockArgument>(compute->getOperand(0));
+      if (inputCount != 1 || !input || input.getArgNumber() != 0 ||
+          !isa<atlas::VirtualBF16Type>(operands.front().getType()) ||
+          !isa<atlas::VirtualBF16Type>(
+              getTypeConverter()->convertType(op->getResult(0).getType())))
+        return failure();
+      Operation *empty = genericDestinationToErase(
+          op, op->getOperand(op->getNumOperands() - 1));
+      rewriter.replaceOp(op, operands.front());
+      if (empty)
+        rewriter.eraseOp(empty);
+      return success();
+    }
+    if (compute->getNumOperands() != 2)
+      return failure();
     SmallVector<Value> inputs;
     for (unsigned index = 0; index < inputCount; ++index)
       inputs.push_back(operands[index]);
@@ -175,17 +200,19 @@ struct ConvertGeneric : ConversionPattern {
         bool isZero = isZeroConstant(zero);
         if (auto blockArgument = dyn_cast<BlockArgument>(zero);
             blockArgument && blockArgument.getArgNumber() < inputCount)
-          isZero |= isZeroConstant(op->getOperand(blockArgument.getArgNumber()));
+          isZero |=
+              isZeroConstant(op->getOperand(blockArgument.getArgNumber()));
         if (!isZero)
           continue;
-        auto tensorArgument = dyn_cast<BlockArgument>(
-            compute->getOperand(1 - zeroSide));
+        auto tensorArgument =
+            dyn_cast<BlockArgument>(compute->getOperand(1 - zeroSide));
         if (!tensorArgument || tensorArgument.getArgNumber() >= inputCount)
           continue;
         Value source = inputs[tensorArgument.getArgNumber()];
         Operation *relu = createAtlasOp(
-            rewriter, op->getLoc(), atlas::VirtualVPUUnaryOp::getOperationName(),
-            ValueRange{source}, outputType,
+            rewriter, op->getLoc(),
+            atlas::VirtualVPUUnaryOp::getOperationName(), ValueRange{source},
+            outputType,
             rewriter.getNamedAttr("kind", rewriter.getStringAttr("relu")));
         Value destination = op->getOperand(op->getNumOperands() - 1);
         Operation *empty = genericDestinationToErase(op, destination);
@@ -200,7 +227,9 @@ struct ConvertGeneric : ConversionPattern {
 
     StringRef kind = binaryKind(compute);
     if (kind.empty())
-      return failure();
+      return ttatlas::emitUnsupported(
+          op, Twine("no Atlas VPU operation for ") +
+                  compute->getName().getStringRef() + " yet");
     auto lhs = dyn_cast<BlockArgument>(compute->getOperand(0));
     auto rhs = dyn_cast<BlockArgument>(compute->getOperand(1));
     if (!lhs || !rhs || lhs.getArgNumber() >= inputCount ||
