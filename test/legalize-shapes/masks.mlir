@@ -391,3 +391,43 @@ tt.func @tags_per_tile_1d(%ptr: !tt.ptr<f32>) {
   tt.store %ptrs, %y, %mask : tensor<64x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// A row max of a 32x64 block masked to 40 columns, fused into the tiles of x - max. Tiling clones the max into each
+// consumer tile, so the masks must be in place before it: both column tiles of the max read a mask apply (the second
+// one adds -inf to its 24 padded columns), not the loaded tile directly.
+#id = affine_map<(d0, d1) -> (d0, d1)>
+#row = affine_map<(d0, d1) -> (d0)>
+// CHECK-LABEL: tt.func @masked_max_fused_into_subtract
+// CHECK-COUNT-2: linalg.add {ttatlas.mask_apply}
+// CHECK: arith.maxnumf
+tt.func @masked_max_fused_into_subtract(%ptr: !tt.ptr<f32>, %out: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x64x!tt.ptr<f32>>
+  %range = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32>
+  %limit = arith.constant 40 : i32
+  %limits = tt.splat %limit : i32 -> tensor<64xi32>
+  %cmp = arith.cmpi slt, %range, %limits : tensor<64xi32>
+  %col_mask = tt.expand_dims %cmp {axis = 0 : i32} : tensor<64xi1> -> tensor<1x64xi1>
+  %mask = tt.broadcast %col_mask : tensor<1x64xi1> -> tensor<32x64xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<32x64xf32>
+  %x = tt.load %ptrs, %mask, %zero : tensor<32x64x!tt.ptr<f32>>
+  %ninf = arith.constant 0xFF800000 : f32
+  %e1 = tensor.empty() : tensor<32xf32>
+  %init = linalg.fill ins(%ninf : f32) outs(%e1 : tensor<32xf32>) -> tensor<32xf32>
+  %max = linalg.reduce ins(%x : tensor<32x64xf32>) outs(%init : tensor<32xf32>) dimensions = [1]
+  (%a: f32, %b: f32) {
+    %m = arith.maxnumf %a, %b : f32
+    linalg.yield %m : f32
+  }
+  %e = tensor.empty() : tensor<32x64xf32>
+  %shifted = linalg.generic {indexing_maps = [#id, #row, #id], iterator_types = ["parallel", "parallel"]}
+      ins(%x, %max : tensor<32x64xf32>, tensor<32xf32>) outs(%e : tensor<32x64xf32>) {
+  ^bb0(%in: f32, %m: f32, %o: f32):
+    %d = arith.subf %in, %m : f32
+    linalg.yield %d : f32
+  } -> tensor<32x64xf32>
+  %optrs = tt.splat %out : !tt.ptr<f32> -> tensor<32x64x!tt.ptr<f32>>
+  tt.store %optrs, %shifted : tensor<32x64x!tt.ptr<f32>>
+  tt.return
+}

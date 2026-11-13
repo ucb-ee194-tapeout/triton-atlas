@@ -56,6 +56,13 @@ struct LiveOps : RewriterBase::Listener {
   void notifyOperationErased(Operation *op) override { live.erase(op); }
 };
 
+// Does a loop of `op` fall short of whole tiles?
+static bool needsPadding(linalg::LinalgOp op) {
+  return llvm::any_of(op.getStaticLoopRanges(), [](int64_t size) {
+    return size % ttatlas::target::kTileSize != 0;
+  });
+}
+
 struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -150,29 +157,23 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       return success();
     };
 
-    // Consumers first, so each producer is fused into its consumer's tiles
-    // before it is looked at on its own. A mask apply put before a reduction
-    // joins the stack, so it is tiled like any other producer.
-    SmallVector<Operation *> pending(computeOps);
-    while (!pending.empty()) {
-      Operation *op = pending.pop_back_val();
+    // Pad and mask every reduction before anything is tiled or fused. A mask
+    // apply is then an ordinary producer of its reduction, so tiling slices it
+    // and fusion carries it into every clone of the reduction. Done after
+    // fusion, the mask would sit on the original reduction, which dies once a
+    // consumer's tiles have cloned it. Consumers first, as below, so a lane
+    // analysis sees the producers as the kernel wrote them.
+    DenseSet<Operation *> prepared;
+    for (Operation *op : llvm::reverse(computeOps)) {
       if (!tracker.live.contains(op))
         continue;
-      if (llvm::all_of(op->getResults(),
-                       [](Value result) { return result.use_empty(); })) {
-        rewriter.eraseOp(op);
-        continue;
-      }
       auto linalgOp = cast<linalg::LinalgOp>(op);
-      if (isa<linalg::MatmulOp>(op) && !setMxuZero(op)) {
-        signalPassFailure();
-        return;
-      }
-      bool needsPadding =
-          llvm::any_of(linalgOp.getStaticLoopRanges(), [](int64_t size) {
-            return size % ttatlas::target::kTileSize != 0;
-          });
-      if (needsPadding) {
+      if (!llvm::is_contained(linalgOp.getIteratorTypesArray(),
+                              utils::IteratorType::reduction) ||
+          llvm::all_of(op->getResults(),
+                       [](Value result) { return result.use_empty(); }))
+        continue;
+      if (needsPadding(linalgOp)) {
         linalg::LinalgOp paddedOp;
         SmallVector<Value> replacements;
         rewriter.setInsertionPoint(op);
@@ -191,9 +192,46 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
         signalPassFailure();
         return;
       }
-      for (Operation *mask : masks) {
+      for (Operation *mask : masks)
         tracker.live.insert(mask);
-        pending.push_back(mask);
+      prepared.insert(op);
+    }
+    computeOps.clear();
+    module.walk([&](linalg::LinalgOp op) {
+      computeOps.push_back(op);
+      tracker.live.insert(op);
+    });
+
+    // Consumers first, so each producer is fused into its consumer's tiles
+    // before it is looked at on its own.
+    SmallVector<Operation *> pending(computeOps);
+    while (!pending.empty()) {
+      Operation *op = pending.pop_back_val();
+      if (!tracker.live.contains(op))
+        continue;
+      if (llvm::all_of(op->getResults(),
+                       [](Value result) { return result.use_empty(); })) {
+        rewriter.eraseOp(op);
+        continue;
+      }
+      auto linalgOp = cast<linalg::LinalgOp>(op);
+      if (isa<linalg::MatmulOp>(op) && !setMxuZero(op)) {
+        signalPassFailure();
+        return;
+      }
+      if (!prepared.contains(op) && needsPadding(linalgOp)) {
+        linalg::LinalgOp paddedOp;
+        SmallVector<Value> replacements;
+        rewriter.setInsertionPoint(op);
+        if (failed(padToAtlasTiles(rewriter, linalgOp, loadFills, paddedOp,
+                                   replacements))) {
+          signalPassFailure();
+          return;
+        }
+        rewriter.replaceOp(op, replacements);
+        op = paddedOp.getOperation();
+        tracker.live.insert(op);
+        linalgOp = paddedOp;
       }
       if (!exceedsTile(op))
         continue;
