@@ -138,7 +138,7 @@ class AtlasBackend(BaseBackend):
         text = str(mod)
         metadata["name"] = next(line for line in text.splitlines() if "tt.func" in line).split("@")[1].split("(")[0]
         metadata["shared"] = 0
-        # Backend options reach our passes as module tags (include/TTAtlas/TTAtlas.h), so every IR dump records them.
+        # fold_bias_into_dot reaches pass 2 as a module tag (include/TTAtlas/TTAtlas.h), so every IR dump records it.
         builder = ir.builder(mod.context)
         mod.set_attr("ttatlas.fold_bias_into_dot", builder.get_bool_attr(options.fold_bias_into_dot))
         pm = ir.pass_manager(mod.context)
