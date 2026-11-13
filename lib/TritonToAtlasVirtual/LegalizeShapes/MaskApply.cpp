@@ -194,7 +194,11 @@ Lanes lanesOf(Value value, const MaskBoxes &boxes, unsigned depth = 0) {
   // pass on bare functions).
   if (!definition)
     return lanes;
-  if (depth > 24) {
+  // A composed model can carry a row-reduction's logical lanes through a
+  // complete attention block and several MLP operations before another
+  // reduction reads them. The graph is acyclic, so this is a work bound, not
+  // a correctness limit; leave enough room for the model-suite compositions.
+  if (depth > 128) {
     lanes.unsupported = "the chain of ops that carries its padded lanes is "
                         "too long to follow";
     return lanes;
