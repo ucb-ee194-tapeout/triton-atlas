@@ -26,6 +26,8 @@ from triton.compiler.compiler import ASTSource, make_backend  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kernels  # noqa: E402
+from models import attention as model_attention  # noqa: E402
+from models import mlp as model_mlp  # noqa: E402
 
 TARGET = GPUTarget("atlas", "virtual", 1)
 
@@ -79,11 +81,20 @@ ROWS = [
     row("fp8_three_layer", kernels.fp8_three_layer,
         {"X": FP8, "W0": FP8, "W1": FP8, "W2": FP8, "Out": BF16},
         end_to_end=True),
+    row("fp8_four_layer", model_mlp.fp8_four_layer,
+        {"X": FP8, "W0": FP8, "W1": FP8, "W2": FP8, "W3": FP8,
+         "Out": BF16}, end_to_end=True),
     # Pass 1 rejects the BF16 transpose of K (Atlas transposes FP8 only), before it reaches the BF16 dots.
     row("bf16_simple_attention", kernels.bf16_simple_attention, {"Q": BF16, "K": BF16, "V": BF16, "Out": BF16},
         passes_ok=0, first_error=r"unsupported tt\.trans: transposes bf16"),
     row("fp8_simple_attention", kernels.fp8_simple_attention,
         {"Q": FP8, "K": FP8, "V": FP8, "Out": BF16}, end_to_end=True),
+    row("attention_then_mlp", model_attention.attention_then_mlp,
+        {"Q": FP8, "K": FP8, "V": FP8, "W0": FP8, "W1": FP8,
+         "Out": BF16}, end_to_end=True),
+    row("stacked_attention", model_attention.stacked_attention,
+        {"Q": FP8, "K0": FP8, "V0": FP8, "K1": FP8, "V1": FP8,
+         "Out": BF16}, end_to_end=True),
     # Expected end-to-end failure: pass 7 splices one K chain at a time, and four output tiles each have a chain
     # (planned pass 7 fix).
     row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16},
