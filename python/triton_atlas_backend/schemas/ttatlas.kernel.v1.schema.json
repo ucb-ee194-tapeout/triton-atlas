@@ -160,10 +160,14 @@
           "type": "array",
           "prefixItems": [
             {
-              "const": 32
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32
             },
             {
-              "const": 32
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32
             }
           ],
           "items": false,
@@ -177,6 +181,12 @@
           "enum": [
             "row_major",
             "tile_major"
+          ]
+        },
+        "pad_neutral": {
+          "enum": [
+            "zero",
+            "neg_inf"
           ]
         }
       }

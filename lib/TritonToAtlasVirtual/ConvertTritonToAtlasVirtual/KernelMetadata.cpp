@@ -49,6 +49,7 @@ LogicalResult attachKernelMetadata(ModuleOp module) {
     if (!atlas::hasAtlasBoundaryTiles(function))
       continue;
     std::map<int32_t, ttatlas::SlotAttr> inputs, outputs;
+    std::map<int32_t, ttatlas::PadAttr> padding;
     bool invalid = false;
     function.walk([&](Operation *op) {
       bool input = isa<atlas::VirtualInputBF16Op, atlas::VirtualInputFP8Op>(op);
@@ -72,6 +73,9 @@ LogicalResult attachKernelMetadata(ModuleOp module) {
         invalid = true;
         return;
       }
+      if (input)
+        if (auto pad = op->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad))
+          padding[slot.getIndex()] = pad;
       auto &table = input ? inputs : outputs;
       auto [it, inserted] = table.emplace(slot.getIndex(), slot);
       if (!inserted && (!input || it->second != slot)) {
@@ -166,6 +170,10 @@ LogicalResult attachKernelMetadata(ModuleOp module) {
               for (int64_t dim : slot.getLogicalShape())
                 out.value(dim);
             });
+            if (name == "inputs")
+              if (auto pad = padding[index])
+                out.attribute("pad_neutral",
+                              ttatlas::stringifyPadNeutral(pad.getNeutral()));
             out.attribute("host_dtype", dtype);
             out.attribute("layout", ttatlas::stringifyLayout(layout));
           });

@@ -1,137 +1,161 @@
-# Boundaries + Stream lane (M1)
+# Atlas boundary conversion and metadata
 
 ## Pass 6: logical tile slots
 
-The native C++ pointer evaluator from `b47dca6` remains the proof engine:
-function pointer arguments, splat/expand_dims/broadcast, chained addptr,
-make_range, scalar/dense integer constants, and add/subtract/multiply.
-APInt preserves integer wrapping and rejects poison-producing nsw/nuw overflow.
-Hints never substitute for an address proof.
+Pass 6 assigns deterministic input and output slots after shape and dtype
+legalization. It consumes `ttatlas.host_dtype` from Pass 1 and optional
+`#ttatlas.pad<neutral = ..., logical_shape = [...]>` from Pass 4. The frozen
+SlotAttr fields and enum values are unchanged.
 
-The approved slice contract keeps the frozen SlotAttr fields unchanged:
+Supported boundary forms are:
 
-- A direct 32x32 load/store carries its own `#ttatlas.slot`.
-- A larger load is used only by constant 32x32, unit-stride
-  `tensor.extract_slice` operations. Each slice carries its slot.
-- A larger store consumes a disjoint, complete chain of constant, tile-aligned
-  32x32 `tensor.insert_slice` operations into a fresh `tensor.empty`. Each
-  insert carries its output slot. Shared or overlapping assemblies fail.
+- Direct unmasked 32x32 loads and BF16 stores, tagged on the memory operation.
+- Larger rank-two loads feeding only constant 32x32, unit-stride
+  `tensor.extract_slice` operations, each tagged with its slot.
+- Larger stores assembled by a disjoint, complete, tile-aligned chain of
+  32x32 `tensor.insert_slice` operations into a fresh `tensor.empty`, with
+  output slots on the inserts.
+- Contiguous 32-element BF16 input vectors, represented as `bias_bf16` slots
+  with logical shape `[1,32]` and origin `(0, element_offset)`. A padding tag
+  `[1,N]` describes a shorter valid prefix. Rank-one outputs are unsupported.
 
-`BoundaryTiles.h` shares structural interpretation between assignment, boundary
-lowering and the Stage 6 contract verifier. It does not number slots or prove
-pointers. Jonathan's verifier and attribute comments were updated only for this
-approved contract; no attribute fields or enum values changed.
+The native pointer evaluator supports function pointer arguments,
+splat/expand_dims/broadcast, chained addptr, make_range, scalar/dense integer
+constants, and integer add/subtract/multiply. APInt preserves wrapping and
+rejects poison-producing nsw/nuw overflow. Hints do not substitute for proof.
+Each rank-two lane must prove
+`argument + first_offset + row * parent_width + column`; tile origins include
+both parent pointer and slice offsets. A pointer argument must use a consistent
+host row width throughout the kernel.
 
-Each slice is evaluated at its parent coordinates. Every lane must prove
-`argument + first_offset + row * parent_width + column`; tile_origin is
-`(first_offset / parent_width, first_offset % parent_width)`. Thus parent pointer
-and slice offsets both contribute. A pointer argument must use a consistent
-host row width throughout the kernel, preventing accidental reuse across
-incompatible views. Other strides, dynamic accesses, masked memory, volatile
-loads, nested memory/control flow, pointer casts and FP8 stores fail explicitly.
+Input slots follow memory/slice source order. Identical tiles reuse a slot only
+when role, original host dtype, logical shape and padding neutral agree.
+Outputs use a separate dense index space. Repeated writes to a logical output
+tile and loads after stores fail. Attributes are published only after successful
+module analysis.
 
-Inputs use deterministic memory/slice source order, independent of SSA use-list
-order. Identical logical tiles reuse a slot only with matching role, original
-host dtype and logical shape. Conflicting representations and repeated output
-writes are rejected. Output indices form a separate dense space. No loads may
-follow stores. Attributes are published only after successful module analysis.
+FP8 role inference follows dot/matmul operands, float/tensor casts and
+transposes: direct B is KN; a transposed B source is NK. Transposed activations
+and ambiguous roles fail. BF16 addition inputs are classified as biases;
+other BF16 inputs are constants, or masks when tagged with neg_inf padding.
+Rank-one BF16 inputs are classified as bias rows without proving their later
+broadcast direction.
 
-Role inference follows TTIR dot and upstream `linalg.matmul` operands, float
-casts, tensor casts, TTIR transposes and `linalg.transpose`. A direct B operand
-is KN; a transposed B source is NK. Transposed activations and ambiguous roles
-fail. BF16 addition/generic-add inputs are biases; other BF16 inputs are
-constants, or masks when tagged with neg_inf padding.
+## Partial tiles and host buffers
 
-The original host dtype is copied verbatim from the parent memory operation.
-Full tiles inside a parent's unpadded logical extent retain shape [32,32].
-Partial padded tiles and 1-D bias packing remain outside M1.
+Pass 6 preserves direct tiles' unpadded logical rectangles. For slices it
+intersects a parent's logical extent with the slice offsets. Output tags can
+come from the stored value's producer. Invalid extents fail; full tiles retain
+`[32,32]`. Physical IR tiles remain 32x32 even when their logical shapes are
+smaller.
+
+`python/triton_atlas_backend/boundary.py` provides independent host-buffer
+primitives:
+
+- `pack_input_tile` copies valid elements and fills invalid lanes with the
+  tagged zero or negative-infinity neutral. It accepts already encoded,
+  little-endian BF16 or E4M3FN bytes and rejects FP8 negative infinity.
+- Rank-one BF16 bias packing repeats the padded row 32 times. This is the
+  proposed row-broadcast convention for Devansh's broadcast-erasure patterns.
+- `unpack_output_tile` writes only the logical BF16 rectangle, preserving
+  bytes outside that rectangle in the destination buffer.
+
+These helpers require the original host shape from their caller. They perform
+no dtype conversion, allocation, device transfer or launch. Original host dtype
+metadata, including f32, is retained faithfully, but helpers reject unsupported
+encoded host dtypes. AtlasDriver's launcher remains a stub and does not call
+these helpers. Physical buffer tests prove helper behavior, not device runtime
+padding/cropping or kernel execution.
 
 ## Pass 7: boundary conversion
 
-The existing boundary hook creates an argument-free func.func returning
-`!atlas.virtual_state`. Inputs are emitted by slot index; slices of a reused
-input map to the same virtual value. Outputs are emitted in original store and
-assembly order, threading the state token linearly. The original SlotAttr stays
-on virtual I/O for metadata generation.
+Boundary conversion creates an argument-free func.func returning
+`!atlas.virtual_state`. Inputs are emitted by slot index; reused inputs share a
+virtual value. Outputs follow original store/assembly order with a linear state
+chain. SlotAttr remains on virtual I/O, and normalized PadAttr remains on virtual
+inputs for metadata generation.
 
-Whole-tensor loads/stores, boundary slices, output assembly empties and proven
-address scaffolding are removed. Escaping pointer/address values, unrelated
-slices and nested boundary memory fail before rewriting. Linalg compute regions
-are cloned for Devansh's patterns. The shared conversion driver and compute
-patterns were not changed in this integration. The driver still uses partial
-conversion while compute implementations are pending; Stage 7 and the stream
-verifier must be run to check completed output.
+The conversion removes boundary loads/stores, supported slices/assemblies and
+proven address scaffolding. Escaping addresses, unrelated slices, nested memory,
+masked accesses and unsupported control flow fail. Linalg compute regions are
+cloned for compute patterns. The shared driver marks TTIR boundary operations
+illegal but still uses partial conversion; the Stage 7 contract and Atlas stream
+verifier are necessary to establish completed conversion. This branch does not
+implement Devansh's compute patterns.
 
-## Kernel metadata v1
+## Kernel metadata
 
-The schema is packaged at
-`python/triton_atlas_backend/schemas/ttatlas.kernel.v1.schema.json`; the Stage A
-golden example is `docs/examples/ttatlas.kernel.v1.json`.
+The packaged schema is
+`python/triton_atlas_backend/schemas/ttatlas.kernel.v1.schema.json`; an example
+manifest is `docs/examples/ttatlas.kernel.v1.json`.
 
-Fields are version, name, dram_base {input,output}, inputs, outputs, grid and
-legalized. Slot entries include index, arg, role, tile_origin, logical_shape,
-host_dtype and layout. Decisions for v1/M1:
+Metadata includes version, name, DRAM bases, input/output tables, grid and
+legalization history. Each slot records index, pointer argument, role, constant
+nonnegative affine tile origin, logical shape, original host dtype and layout.
+Logical dimensions are 1..32; input entries can additionally carry
+`pad_neutral` (`zero` or `neg_inf`). The additive field and `[1,N]` convention
+need consumer agreement before becoming an integrated runtime ABI.
 
-- Origins use canonical MLIR affine-map strings with six symbols and constant,
-  nonnegative results. Host dtypes use their original MLIR scalar spelling.
-- Layout uses the frozen enum spelling; the default is row_major.
-- Input/output tables are sorted by dense index. JSON key order is fixed by
-  the producer. JSON integer addresses use 2048-byte slots; default input base
-  is 0x90000000, output base immediately follows allocated input slots.
-- Grid is [1,1,1]. Legalization records preserve {pass,what,loc} and source order;
-  absent history becomes []. Existing manifests must match every generated
-  field, including original dtypes, origins, layout and history.
-- Empty input/output tables are rejected: atlas-mlir reserves at least one
-  slot per window, so zero-input placement needs a separate ABI decision.
+Tables use dense sorted indices. Slots are 2048 bytes, default input base is
+0x90000000, and output placement immediately follows inputs. Grid is `[1,1,1]`.
+AtlasBoundaryABI checks alignment, disjoint windows and 32-bit address bounds.
+Empty input/output tables fail. Existing manifests must match generated fields.
 
-AtlasBoundaryABI validates aligned, disjoint selected-DRAM windows and 32-bit
-address bounds. The Python exporter validates the packaged JSON Schema plus
-index/address relationships before copying the exact JSON string into Triton's
-cached metadata. The cache field is `ttatlas_kernel`, because Triton constructs
-a namedtuple and cannot accept dotted metadata keys. MLIR retains `ttatlas.kernel`.
-Existing name/shared and unrelated cache fields are preserved appropriately.
-
-AtlasOptions includes precision_policy, layout and dram_base, all covered by
-its cache hash. Since Triton's Python bindings expose no i64/custom-enum
-attribute builder, placement is handed to our producer as the private string
-attribute `atlas_backend.options`, then normalized to the frozen typed module
-attributes. Explicit module settings must agree. The precision policy uses the
-existing shared string tag. The backend hash also includes schema contents.
+The Python exporter validates the schema and index/address relationships before
+copying the manifest verbatim into Triton's `ttatlas_kernel` cache field. MLIR
+uses `ttatlas.kernel`. Backend options and schema contents participate in cache
+hashing. Placement options are normalized from the private
+`atlas_backend.options` handoff to typed module attributes; explicit settings
+must agree.
 
 ## Upstream integration limits
 
-The feature branch contains latest fetched main `5ecf687`, plus preserved
-history from the interrupted merge of `e909d2b`. Passes 1-5 and compute/type
-conversion still contain upstream placeholders. The real Stage A TTIR fixture
-first fails because Pass 1 supplies no host_dtype tags. No teammate's compute
-implementation, shared driver, Merlin or model2MLIR was changed.
+The review on November 12, 2026 fetched main at `694e1b2`, Devansh's
+`devansh/pass7-compute` at `5f167b8`, Jonathan's `feature/legalize-dtypes` at
+`21b067d`, and the newer `dev/legalize-dtypes` at `92111d0`. Main has not been
+merged or rebased into this branch. Main and the newer dtype branch still have
+a placeholder Pass 4; the feature/compute branches contain shape legalization.
 
-The standalone tool registers Tensor and Linalg, while the Python plugin's
-`registerAtlasDialects` currently registers neither. Native Python mixed-IR
-parsing therefore fails on `tensor.extract_slice`; this needs a coordinated
-plugin registration/linking change alongside the upstream compute work. The
-Python options/export test exercises direct TTIR tiles; the standalone tool
-exercises the mixed Tensor boundary path. This lane leaves plugin.cpp intact.
+Remaining integration work:
 
-## Validation (November 6, 2026)
+- The implemented Pass 4 paths tag masked loads, stored-value producers and
+  tensor.pad operations. Masked memory and general tensor.pad/slice/crop graphs
+  remain outside this collector's contract. A padding tag alone does not prove
+  an arbitrary mask safe.
+- Some rank-one Pass 4 paths construct one-dimensional padding shapes, while
+  PadAttr's verifier requires two dimensions. Agree on normalization with
+  Jonathan and Devansh without changing the shared attribute unilaterally.
+- Prove supported bias broadcast directions and test an actual bias-add
+  computation through compute conversion. The native bias test currently
+  checks an unused vector's slot and metadata.
+- Preserve Devansh's boundary-converter changes when integrating compute.
+  Jonathan's feature branch has textual conflicts in the shared conversion
+  driver and compiler.py; current main has no detected textual conflicts.
+- Pointer proof assumes parent tensor width is the host row stride. Different
+  strides and compact host layouts need an agreed interface; the metadata has
+  no separate host shape/stride field.
+- Wire helpers into a runtime with host dtype conversion, slot transfers and
+  launch. Python plugin registration also lacks Tensor/Linalg dialects for
+  mixed-IR parsing; main's newer Linalg linking change alone does not register
+  those dialects.
 
-- `make build.plugin build.tools`: passed, with UV_CACHE_DIR under /tmp.
-- Wheel build: passed; the archive includes the version-1 JSON schema.
-- Assign-slots: 29/29 lit tests, including five Python slice-contract tests.
-- Boundary: 7/7 lit tests; kernel metadata: 6/6.
-- Compiler export: 9/9 Python tests (one lit wrapper).
-- Contract verifier: 8/8 lit tests, including Stages 6 and 7.
-- Selected lane suite: 45/45 passed.
-- Full repository lit suite: 61 passed, one expected failure, one failure.
-  The sole failure is pipeline/stage-a.mlir, blocked by missing host_dtype
-  tags from upstream Pass 1. The target Stage A test remains an expected failure.
-- Ruff, clang-format verification, git diff --check, merge-marker scan and
-  unmerged-index checks passed. Lit used Python's fork start method because
-  the sandbox prohibits the forkserver socket.
+No Pass 4 implementation or compute-pattern/type-conversion source is changed
+by this boundary work. Shared verifier/driver integration is limited to the
+boundary contract.
 
-The real matmul+ReLU TTIR fixture was separately attempted through the full
-pipeline, Stage 7 contract and virtual stream verifier; it fails at the same
-missing Pass 1 tags. The mixed two-tile copy succeeds through the standalone
-native pipeline and final verifiers. No compute/shape/dtype implementation was
-substituted to conceal the Stage A blocker. Logs, test JSON and wheel artifacts
-are in /tmp/triton-atlas-resume-backup/.
+## Validation
+
+The November 12 review of the current implementation produced:
+
+- Plugin/tools build: passed with `make build.tools`.
+- Relevant slot/boundary/metadata/compiler/contract suite: 52/52 lit tests
+  passed, including 8 buffer/native-metadata Python cases, 7 slice cases and
+  9 metadata-export cases inside lit wrappers.
+- Full suite: 62 passed, 1 expected failure, 1 failure. Stage A still fails
+  because Pass 1 does not attach host_dtype tags. This is an upstream pipeline
+  blocker, not evidence of successful end-to-end execution.
+
+Tests cover full tiles, partial extents and slice intersections, padding
+neutrals, bias slots and row replication, output cropping, origins, roles,
+dtypes, slot reuse and rejection of unsupported forms. Lit uses Python's fork
+start method because the sandbox disallows the default forkserver socket.

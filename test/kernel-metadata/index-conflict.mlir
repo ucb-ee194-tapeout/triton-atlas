@@ -9,4 +9,3 @@ module {
     return %1 : !atlas.virtual_state
   }
 }
-
