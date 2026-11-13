@@ -33,7 +33,14 @@ struct ConvertTritonToAtlasVirtual
     // ttatlas-verify-contract{stage=7} reports what is left.
     ConversionTarget target(*context);
     target.addLegalDialect<atlas::AtlasDialect, func::FuncDialect>();
-    target.addIllegalOp<FuncOp, LoadOp, StoreOp>();
+    // A kernel with compute that no pattern lowers yet stays TTIR, untouched
+    // and without an error; only a boundary-only kernel is converted.
+    target.addDynamicallyLegalOp<FuncOp>(
+        [](FuncOp function) { return hasUnloweredCompute(function); });
+    target.addDynamicallyLegalOp<LoadOp, StoreOp>([](Operation *op) {
+      auto function = op->getParentOfType<FuncOp>();
+      return function && hasUnloweredCompute(function);
+    });
     ModuleOp module = getOperation();
     if (failed(applyPartialConversion(module, target, std::move(patterns))) ||
         failed(attachKernelMetadata(module)))

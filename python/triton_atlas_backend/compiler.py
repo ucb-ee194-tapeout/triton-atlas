@@ -48,12 +48,19 @@ def _validate_kernel_metadata(manifest, name):
 def _export_kernel_metadata(mod, metadata):
     """Copy the finalized MLIR manifest verbatim; the driver owns its use."""
     functions = []
+    unconverted = []
 
     def collect(op):
         if op.get_name() == "func.func":
             functions.append((op.get_str_attr("sym_name"), op.get_str_attr("ttatlas.kernel")))
+        elif op.get_name() == "tt.func":
+            unconverted.append(op)
 
     mod.walk(collect)
+    if not functions and unconverted:
+        # Pass 7 converts a kernel only when it has no compute left to lower; until the compute patterns land the
+        # kernel stays TTIR and has no manifest to export.
+        return
     if len(functions) != 1:
         raise ValueError("Atlas metadata export requires exactly one converted func.func")
     name, manifest = functions[0]
@@ -213,7 +220,8 @@ class AtlasBackend(BaseBackend):
             # producer; shared typed encodings remain unchanged.
             mod.set_attr(
                 "atlas_backend.options",
-                builder.get_string_attr(json.dumps({"dram_base": options.dram_base, "layout": options.layout}, sort_keys=True)))
+                builder.get_string_attr(
+                    json.dumps({"dram_base": options.dram_base, "layout": options.layout}, sort_keys=True)))
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.plugin.add_atlas_virtual_pipeline(pm)

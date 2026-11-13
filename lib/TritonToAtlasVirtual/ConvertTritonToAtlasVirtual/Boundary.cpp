@@ -270,6 +270,26 @@ struct ConvertBoundary : OpConversionPattern<FuncOp> {
 };
 } // namespace
 
+bool hasUnloweredCompute(Operation *function) {
+  bool compute = false;
+  function->walk([&](Operation *op) {
+    if (op == function || isAddressMath(op) ||
+        isa<LoadOp, StoreOp, ReturnOp>(op))
+      return;
+    StringRef dialect = op->getName().getDialectNamespace();
+    if (dialect == "linalg" || dialect == "math" || dialect == "tt")
+      compute = true;
+    else if (dialect == "arith" &&
+             llvm::any_of(llvm::concat<const Type>(op->getOperandTypes(),
+                                                   op->getResultTypes()),
+                          [](Type type) {
+                            return isa<FloatType>(getElementTypeOrSelf(type));
+                          }))
+      compute = true;
+  });
+  return compute;
+}
+
 void populateBoundaryPatterns(TypeConverter &typeConverter,
                               RewritePatternSet &patterns) {
   patterns.add<ConvertBoundary>(typeConverter, patterns.getContext());

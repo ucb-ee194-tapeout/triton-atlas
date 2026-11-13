@@ -26,6 +26,11 @@ void populateReducePatterns(TypeConverter &typeConverter,
 // token (Boundary.cpp).
 void populateBoundaryPatterns(TypeConverter &typeConverter,
                               RewritePatternSet &patterns);
+// Does the kernel still hold compute that no pattern has lowered yet (a linalg
+// op, TTIR compute, float arith or math)? Then the boundary conversion leaves
+// the whole function as it is: it would clone that compute into an Atlas
+// function nothing can finish.
+bool hasUnloweredCompute(Operation *function);
 // After the conversion: the DRAM bases and ttatlas.kernel on the function
 // (KernelMetadata.cpp).
 LogicalResult attachKernelMetadata(ModuleOp module);
