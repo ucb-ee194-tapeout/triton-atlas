@@ -118,3 +118,57 @@ tt.func @column_mask(%ptr: !tt.ptr<f32>) {
                           outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
   tt.return
 }
+
+// -----
+
+// A row tail and a column tail together, (r < 16)[:, None] & (c < 20)[None, :]: logical shape 16x20.
+// CHECK-LABEL: tt.func @row_and_column_mask
+// CHECK: tt.load {{.*}}ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 20]>
+tt.func @row_and_column_mask(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  %c16 = arith.constant 16 : i32
+  %c20 = arith.constant 20 : i32
+  %rows16 = tt.splat %c16 : i32 -> tensor<32xi32>
+  %cols20 = tt.splat %c20 : i32 -> tensor<32xi32>
+  %row_cmp = arith.cmpi slt, %range, %rows16 : tensor<32xi32>
+  %col_cmp = arith.cmpi slt, %range, %cols20 : tensor<32xi32>
+  %row_2d = tt.expand_dims %row_cmp {axis = 1 : i32} : tensor<32xi1> -> tensor<32x1xi1>
+  %col_2d = tt.expand_dims %col_cmp {axis = 0 : i32} : tensor<32xi1> -> tensor<1x32xi1>
+  %row_mask = tt.broadcast %row_2d : tensor<32x1xi1> -> tensor<32x32xi1>
+  %col_mask = tt.broadcast %col_2d : tensor<1x32xi1> -> tensor<32x32xi1>
+  %mask = arith.andi %row_mask, %col_mask : tensor<32x32xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+  %a = tt.load %ptrs, %mask, %zero : tensor<32x32x!tt.ptr<f32>>
+  %b = tt.load %ptrs : tensor<32x32x!tt.ptr<f32>>
+  %empty = tensor.empty() : tensor<32x32xf32>
+  %scalar_zero = arith.constant 0.0 : f32
+  %acc = linalg.fill ins(%scalar_zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %result = linalg.matmul ins(%a, %b : tensor<32x32xf32>, tensor<32x32xf32>)
+                          outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  tt.return
+}
+
+// -----
+
+// The other spelling of a row tail: the range expanded first, then compared, r[:, None] < 16. Logical shape 16x32.
+// CHECK-LABEL: tt.func @expanded_range_mask
+// CHECK: tt.load {{.*}}ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 32]>
+tt.func @expanded_range_mask(%ptr: !tt.ptr<f32>) {
+  %ptrs = tt.splat %ptr : !tt.ptr<f32> -> tensor<32x32x!tt.ptr<f32>>
+  %range = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+  %rows = tt.expand_dims %range {axis = 1 : i32} : tensor<32xi32> -> tensor<32x1xi32>
+  %c16 = arith.constant 16 : i32
+  %limits = tt.splat %c16 : i32 -> tensor<32x1xi32>
+  %cmp = arith.cmpi slt, %rows, %limits : tensor<32x1xi32>
+  %mask = tt.broadcast %cmp : tensor<32x1xi1> -> tensor<32x32xi1>
+  %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+  %a = tt.load %ptrs, %mask, %zero : tensor<32x32x!tt.ptr<f32>>
+  %b = tt.load %ptrs : tensor<32x32x!tt.ptr<f32>>
+  %empty = tensor.empty() : tensor<32x32xf32>
+  %scalar_zero = arith.constant 0.0 : f32
+  %acc = linalg.fill ins(%scalar_zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
+  %result = linalg.matmul ins(%a, %b : tensor<32x32xf32>, tensor<32x32xf32>)
+                          outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  tt.return
+}
