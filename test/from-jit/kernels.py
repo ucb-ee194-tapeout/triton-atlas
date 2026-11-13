@@ -121,3 +121,50 @@ def bf16_simple_attention(Q, K, V, Out):
     probability = (exponential / denominator[:, None]).to(tl.bfloat16)
     result = tl.dot(probability, v, input_precision='ieee').to(tl.bfloat16)
     tl.store(Out + r * 32 + c, result)
+
+
+# Ours: kernels bigger or smaller than one 32x32 tile, for pass 4 (shape legalization).
+# One 64x64x64 dot: 2x2 output tiles, each a K chain of 2.
+@triton.jit
+def matmul_64(A, Bm, C):
+    r = tl.arange(0, 64)
+    off = r[:, None] * 64 + r[None, :]
+    tl.store(C + off, tl.dot(tl.load(A + off), tl.load(Bm + off)).to(tl.bfloat16))
+
+
+# A 64x32 @ 32x32 dot + ReLU: 2 row tiles, no K split.
+@triton.jit
+def matmul_relu_64x32(A, Bm, C):
+    m = tl.arange(0, 64)
+    n = tl.arange(0, 32)
+    a = tl.load(A + m[:, None] * 32 + n[None, :])
+    b = tl.load(Bm + n[:, None] * 32 + n[None, :])
+    tl.store(C + m[:, None] * 32 + n[None, :], tl.maximum(tl.dot(a, b), 0.0).to(tl.bfloat16))
+
+
+# A row max of a 64x64 tile: 2 row tiles, each reducing 2 column tiles.
+@triton.jit
+def row_max_64(X, Y):
+    r = tl.arange(0, 64)
+    x = tl.load(X + r[:, None] * 64 + r[None, :]).to(tl.float32)
+    tl.store(Y + r, tl.max(x, axis=1).to(tl.bfloat16))
+
+
+# A 16x16 BF16 add: smaller than a tile, so pass 4 pads it, conversions included.
+@triton.jit
+def add_16(X, Y):
+    r = tl.arange(0, 16)
+    off = r[:, None] * 16 + r[None, :]
+    x = tl.load(X + off).to(tl.float32)
+    tl.store(Y + off, (x + x).to(tl.bfloat16))
+
+
+# A 50-row BF16 add through a tail mask (rows < 50 of a 64-row block): pass 4 turns the mask into padding.
+@triton.jit
+def add_rows_50(X, Y):
+    r = tl.arange(0, 64)
+    c = tl.arange(0, 32)
+    off = r[:, None] * 32 + c[None, :]
+    mask = (r < 50)[:, None]
+    x = tl.load(X + off, mask=mask, other=0.0).to(tl.float32)
+    tl.store(Y + off, (x + x).to(tl.bfloat16), mask=mask)

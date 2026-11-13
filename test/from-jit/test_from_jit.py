@@ -36,6 +36,10 @@ STAGES = {
     1: ["--ttatlas-validate-ttir"],
     2: ["--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP],
     3: ["--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg"],
+    4: [
+        "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
+        "--ttatlas-legalize-shapes", *CLEANUP
+    ],
 }
 LAST = max(STAGES)
 
@@ -66,6 +70,11 @@ ROWS = [
     # Pass 1 rejects the BF16 transpose of K (Atlas transposes FP8 only), before it reaches the BF16 dots.
     row("bf16_simple_attention", kernels.bf16_simple_attention, {"Q": BF16, "K": BF16, "V": BF16, "Out": BF16},
         passes_ok=0, first_error=r"unsupported tt\.trans: transposes bf16"),
+    row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16}),
+    row("matmul_relu_64x32", kernels.matmul_relu_64x32, {"A": FP8, "Bm": FP8, "C": BF16}),
+    row("row_max_64", kernels.row_max_64, {"X": BF16, "Y": BF16}),
+    row("add_16", kernels.add_16, {"X": BF16, "Y": BF16}),
+    row("add_rows_50", kernels.add_rows_50, {"X": BF16, "Y": BF16}),
 ]
 
 
