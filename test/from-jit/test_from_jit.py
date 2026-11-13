@@ -40,6 +40,10 @@ STAGES = {
         "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
         "--ttatlas-legalize-shapes", *CLEANUP
     ],
+    5: [
+        "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
+        "--ttatlas-legalize-shapes", *CLEANUP, "--ttatlas-legalize-dtypes", *CLEANUP
+    ],
 }
 LAST = max(STAGES)
 
