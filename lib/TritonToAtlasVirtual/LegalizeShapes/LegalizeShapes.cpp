@@ -10,9 +10,11 @@
 #include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/Transforms/Transforms.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/TilingInterface.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -728,6 +730,21 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       return;
     }
     freshFillDestinations(module, rewriter);
+
+    // Tiling the consumer first and then the producer again slices a loaded
+    // tensor twice (64x64 -> 32x64 -> 32x32). Merge each chain into one
+    // constant slice of the load, which the stage-4 contract asks for, with
+    // MLIR's own patterns; no folding, so nothing else changes here.
+    RewritePatternSet mergeSlices(module.getContext());
+    tensor::populateMergeConsecutiveInsertExtractSlicePatterns(mergeSlices);
+    if (failed(applyPatternsGreedily(
+            module, std::move(mergeSlices),
+            GreedyRewriteConfig().enableFolding(false).enableConstantCSE(
+                false)))) {
+      module.emitError("atlas: merging tile slices did not converge");
+      signalPassFailure();
+      return;
+    }
 
     if (failed(propagateStorePadTags(storePadTags))) {
       signalPassFailure();
