@@ -45,15 +45,16 @@ static std::optional<Role> getWeightRole(Value value) {
   return std::nullopt;
 }
 
-// A direct Atlas input gets its activation role from its slot.  The second
-// and later layers of an MLP instead consume the FP8 result of the preceding
-// BF16-to-FP8 pack, which has no DRAM slot because it stays on Atlas.
-static bool isPackedActivation(Value value) {
+// A direct Atlas input gets its role from its slot.  An intermediate BF16
+// tile that is packed to FP8 has no DRAM slot because it stays on Atlas.  It
+// can be an activation (an MLP handoff) or a weight-like input (Q/K/V
+// projections in the SmolVLA transformer core).
+static bool isPackedFP8Tile(Value value) {
   auto generic = value.getDefiningOp<linalg::GenericOp>();
-  if (!generic || generic.getNumDpsInputs() != 1 ||
-      !isa<Float8E4M3FNType>(
-          cast<RankedTensorType>(generic->getResult(0).getType())
-              .getElementType()))
+  if (!generic || generic.getNumDpsInputs() != 1)
+    return false;
+  auto type = dyn_cast<RankedTensorType>(generic->getResult(0).getType());
+  if (!type || !isa<Float8E4M3FNType>(type.getElementType()))
     return false;
   // Pass 3 hoists the scalar conversion's scale tag to this generic.
   return generic->hasAttr(ttatlas::kScale);
@@ -115,17 +116,27 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
   if (failed(unit))
     return failure();
   std::optional<Role> role = getWeightRole(matmul->getOperand(1));
-  if (!role || (*role != Role::weight_fp8_nk && *role != Role::weight_fp8_kn))
+  Operation *logicalTranspose = matmul->getOperand(1).getDefiningOp();
+  bool packedWeight = isPackedFP8Tile(matmul->getOperand(1)) ||
+                      (logicalTranspose &&
+                       logicalTranspose->getName().getStringRef() ==
+                           "linalg.transpose" &&
+                       isPackedFP8Tile(logicalTranspose->getOperand(0)));
+  if ((!role || (*role != Role::weight_fp8_nk &&
+                 *role != Role::weight_fp8_kn)) &&
+      !packedWeight)
     return ttatlas::emitUnsupported(
-        matmul, "matmul weight requires a weight_fp8_nk or weight_fp8_kn slot");
-  if (*role == Role::weight_fp8_kn)
+        matmul,
+        "matmul weight requires a weight_fp8_nk/weight_fp8_kn slot or a "
+        "packed on-chip FP8 tile");
+  if (role && *role == Role::weight_fp8_kn)
     if (Operation *transpose = matmul->getOperand(1).getDefiningOp();
         transpose && transpose->getName().getStringRef() == "linalg.transpose")
       return ttatlas::emitUnsupported(
           matmul, "weight_fp8_kn must not have a linalg.transpose producer");
   auto activationRole = getWeightRole(matmul->getOperand(0));
   if ((!activationRole || *activationRole != Role::activation_fp8) &&
-      !isPackedActivation(matmul->getOperand(0)))
+      !isPackedFP8Tile(matmul->getOperand(0)))
     return ttatlas::emitUnsupported(
         matmul,
         "matmul left operand requires an activation_fp8 slot or a packed "
@@ -144,11 +155,15 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
 
   Value activation = operands[0];
   Value weight = operands[1];
-  if (*role == Role::weight_fp8_nk)
+  if (role && *role == Role::weight_fp8_nk)
     if (Operation *transpose = matmul->getOperand(1).getDefiningOp();
         transpose && transpose->getName().getStringRef() == "linalg.transpose")
       weight = rewriter.getRemappedValue(transpose->getOperand(0));
-  if (*role == Role::weight_fp8_kn) {
+  if ((role && *role == Role::weight_fp8_kn) ||
+      (packedWeight && logicalTranspose &&
+       logicalTranspose->getName().getStringRef() == "linalg.transpose")) {
+    if (!role)
+      weight = rewriter.getRemappedValue(logicalTranspose->getOperand(0));
     Type fp8 = atlas::VirtualFP8Type::get(matmul->getContext());
     Operation *transpose =
         createAtlasOp(rewriter, matmul->getLoc(),

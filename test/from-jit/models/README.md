@@ -14,6 +14,7 @@ the same small hardware unit.
 | `stacked_attention` | Two attention layers in sequence |
 | `stacked_attention_then_mlp` | Two attention layers followed by two MLP layers |
 | `attention_then_ten_layer_mlp` | One attention layer followed by ten MLP layers |
+| `smolvla_transformer_core` | Q/K/V projections, attention, output projection, and a two-layer MLP |
 
 Run all cases with:
 
@@ -24,3 +25,12 @@ make test T=test/from-jit
 Every listed case is an end-to-end compiler target: Triton source must reach
 Atlas virtual IR. Runtime execution and numerical comparison are separate
 future tests.
+
+## SmolVLA source basis
+
+`smolvla_transformer_core` is a one-tile regression derived from the
+[BAR Merlin SmolVLA workload](https://github.com/ucb-bar/Merlin-IREE/tree/main/models/smolVLA)
+and its transformer-block sequence. It intentionally tests the supported
+compute core only; it is not the full external SmolVLA checkpoint. RMSNorm,
+residual connections, image/token preprocessing, and runtime weight loading
+remain outside this compiler test until their lowerings exist.

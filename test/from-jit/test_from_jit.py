@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kernels  # noqa: E402
 from models import attention as model_attention  # noqa: E402
 from models import mlp as model_mlp  # noqa: E402
+from models import smolvla as model_smolvla  # noqa: E402
 
 TARGET = GPUTarget("atlas", "virtual", 1)
 
@@ -103,6 +104,9 @@ ROWS = [
          "W2": FP8, "W3": FP8, "W4": FP8, "W5": FP8, "W6": FP8,
          "W7": FP8, "W8": FP8, "W9": FP8, "Out": BF16},
         end_to_end=True),
+    row("smolvla_transformer_core", model_smolvla.smolvla_transformer_core,
+        {"X": FP8, "WQ": FP8, "WK": FP8, "WV": FP8, "WO": FP8,
+         "WUP": FP8, "WDOWN": FP8, "Out": BF16}, end_to_end=True),
     # Expected end-to-end failure: pass 7 splices one K chain at a time, and four output tiles each have a chain
     # (planned pass 7 fix).
     row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16},
