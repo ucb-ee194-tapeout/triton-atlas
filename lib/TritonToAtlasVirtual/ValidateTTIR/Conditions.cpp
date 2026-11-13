@@ -98,6 +98,8 @@ LogicalResult checkLoad(LoadOp load, EmitFn emit) {
 }
 
 LogicalResult checkStore(StoreOp store, EmitFn emit) {
+  if (!isa<RankedTensorType>(store.getValue().getType()))
+    return fail(emit, "a scalar store; Atlas stores whole tiles");
   if (failed(checkUnmasked(store.getMask(), emit)))
     return failure();
   Type dtype = pointee(store.getPtr());
