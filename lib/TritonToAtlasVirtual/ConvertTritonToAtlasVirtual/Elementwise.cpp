@@ -141,6 +141,19 @@ struct EraseDeadTensorOp : ConversionPattern {
 // A value that already is a physically broadcast tile: a row reduction's result
 // (virtual_vpu_reduce fills every row with it) or a 1x32 bias row (the host
 // repeats it over the rows), found through the ops that keep the tile.
+static bool isConstantTile(Value value, unsigned depth = 0) {
+  if (depth > 8)
+    return false;
+  Operation *definition = value.getDefiningOp();
+  if (!definition)
+    return false;
+  if (definition->getName().getStringRef() == "arith.constant")
+    return true;
+  if (auto fill = dyn_cast<linalg::FillOp>(definition))
+    return isConstantTile(fill.getInputs().front(), depth + 1);
+  return false;
+}
+
 static bool isBroadcastSource(Value value, unsigned depth = 0) {
   Operation *definition = value.getDefiningOp();
   if (!definition || depth > 8)
@@ -153,9 +166,21 @@ static bool isBroadcastSource(Value value, unsigned depth = 0) {
   // of its row sum) is still one value per row, so the virtual VPU result is
   // already a physically broadcast tile too.
   if (auto generic = dyn_cast<linalg::GenericOp>(definition);
-      generic && generic.getNumDpsInputs() == 1 &&
-      generic->getNumResults() == 1)
-    return isBroadcastSource(generic.getDpsInputs().front(), depth + 1);
+      generic && generic->getNumResults() == 1) {
+    // `1 / row_sum` has two inputs: the reduced row and a tile of ones.
+    // Pointwise arithmetic keeps the row layout when exactly one input is a
+    // row value and all the rest are constants.
+    bool sawRowValue = false;
+    for (Value input : generic.getDpsInputs()) {
+      if (isBroadcastSource(input, depth + 1)) {
+        sawRowValue = true;
+        continue;
+      }
+      if (!isConstantTile(input, depth + 1))
+        return false;
+    }
+    return sawRowValue;
+  }
   if (isa<tensor::ExpandShapeOp, tensor::CollapseShapeOp>(definition) &&
       definition->getNumOperands() == 1)
     return isBroadcastSource(definition->getOperand(0), depth + 1);
