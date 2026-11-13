@@ -15,6 +15,10 @@ module attributes {ttatlas.dram_base = 2415919104 : i64, ttatlas.layout = #ttatl
     %b = tt.get_program_id x {ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 4>, ttatlas.mxu = 0 : i32} : i32
     // CHECK: ttatlas.pad = #ttatlas.pad<neutral = neg_inf, logical_shape = [32, 20]>, ttatlas.scale = 127 : i32
     %c = tt.get_program_id x {ttatlas.pad = #ttatlas.pad<neutral = neg_inf, logical_shape = [32, 20]>, ttatlas.scale = 127 : i32} : i32
+    // CHECK: ttatlas.pad = #ttatlas.pad<neutral = one, logical_shape = [32, 20]>
+    %d = tt.get_program_id x {ttatlas.pad = #ttatlas.pad<neutral = one, logical_shape = [32, 20]>} : i32
+    // CHECK: ttatlas.pad = #ttatlas.pad<neutral = pos_inf, logical_shape = [32, 20]>
+    %e = tt.get_program_id x {ttatlas.pad = #ttatlas.pad<neutral = pos_inf, logical_shape = [32, 20]>} : i32
     return
   }
 }

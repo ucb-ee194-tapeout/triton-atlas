@@ -17,7 +17,8 @@ def TTAtlas_SlotRole : I32EnumAttr<"SlotRole", "role of a DRAM slot's tile", [
 
 // Neutral element written into padded lanes (pass 4).
 def TTAtlas_PadNeutral : I32EnumAttr<"PadNeutral", "neutral element of padded lanes", [
-    I32EnumAttrCase<"zero", 0>, I32EnumAttrCase<"neg_inf", 1>]> {
+    I32EnumAttrCase<"zero", 0>, I32EnumAttrCase<"neg_inf", 1>,
+    I32EnumAttrCase<"one", 2>, I32EnumAttrCase<"pos_inf", 3>]> {
   let cppNamespace = "::mlir::ttatlas";
   let genSpecializedAttr = 0;
 }

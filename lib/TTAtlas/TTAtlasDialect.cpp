@@ -121,6 +121,8 @@ static LogicalResult verifyTag(Operation *op, NamedAttribute attr) {
     return isa<KChainAttr>(value) ? success() : fail("a #ttatlas.k_chain");
   if (name == kPad)
     return isa<PadAttr>(value) ? success() : fail("a #ttatlas.pad");
+  if (name == kMaskApply)
+    return isa<UnitAttr>(value) ? success() : fail("a unit attribute");
   if (name == kLayout)
     return isa<LayoutAttr>(value) ? success() : fail("a #ttatlas<layout ...>");
   if (name == kDramBase) {
@@ -138,6 +140,8 @@ static LogicalResult verifyTag(Operation *op, NamedAttribute attr) {
                            std::end(kPrecisionPolicies), ", ") +
                 ")");
   }
+  if (name == kFoldBiasIntoDot)
+    return isa<BoolAttr>(value) ? success() : fail("a bool");
   if (name == kKernel)
     return verifyKernelJson(op, value);
   if (name == kLegalized) {
