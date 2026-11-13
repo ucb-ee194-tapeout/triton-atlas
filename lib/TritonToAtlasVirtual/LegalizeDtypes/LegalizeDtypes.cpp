@@ -163,6 +163,11 @@ markAccumulators(ModuleOp module) {
                                  "matmul chains");
       failed = true;
     }
+    // A fill several chains share (after CSE) is cloned per chain: each chain
+    // has its own accumulator, and pass 7 resets one MXU accumulator per
+    // fill.
+    privatize(start, start.getDpsInitOperand(0)->getOperandNumber());
+    fill = start.getDpsInits()[0].getDefiningOp<linalg::FillOp>();
     for (unsigned i = 0, e = fill->getNumOperands(); i < e; ++i)
       privatize(fill, i);
     keep.insert(fill);
