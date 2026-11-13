@@ -149,6 +149,16 @@ static bool isBroadcastSource(Value value, unsigned depth = 0) {
     return slot.getRole() == ttatlas::SlotRole::bias_bf16;
   if (definition->getName().getStringRef() == "linalg.reduce")
     return true;
+  // A unary operation on a row reduction (for example softmax's reciprocal
+  // of its row sum) is still one value per row, so the virtual VPU result is
+  // already a physically broadcast tile too.
+  if (auto generic = dyn_cast<linalg::GenericOp>(definition);
+      generic && generic.getNumDpsInputs() == 1 &&
+      generic->getNumResults() == 1)
+    return isBroadcastSource(generic.getDpsInputs().front(), depth + 1);
+  if (isa<tensor::ExpandShapeOp, tensor::CollapseShapeOp>(definition) &&
+      definition->getNumOperands() == 1)
+    return isBroadcastSource(definition->getOperand(0), depth + 1);
   if (isa<arith::TruncFOp, arith::ExtFOp>(definition) &&
       definition->getNumOperands() == 1)
     return isBroadcastSource(definition->getOperand(0), depth + 1);
