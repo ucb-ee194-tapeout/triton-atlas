@@ -52,7 +52,8 @@ void addLegal(ConversionTarget &target) {
   target.addLegalOp<arith::ConstantOp, arith::AddFOp, arith::SubFOp,
                     arith::MulFOp, arith::MaxNumFOp, arith::MinNumFOp,
                     arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp,
-                    arith::MulIOp, math::ExpOp, math::Exp2Op, scf::YieldOp>();
+                    arith::SubIOp, arith::MulIOp, math::ExpOp, math::Exp2Op,
+                    scf::YieldOp>();
   // Masks: pass 4 turns a mask with compile-time bounds into padding and
   // rejects any other (a runtime bound, a compare that isn't offs < N).
   target.addLegalOp<arith::CmpIOp, arith::AndIOp>();
@@ -74,9 +75,6 @@ void addNoLoweringYet(Rejection r) {
   r.reject<MakeTensorDescOp, DescriptorLoadOp, DescriptorStoreOp>(
       "descriptor kernels; Triton's descriptor rewrite leaves masks, i64 "
       "offsets and reshapes, not plain pointers");
-  // Pass 6 proves each load's and store's address is one whole tile.
-  r.reject<arith::SubIOp>(
-      "subtraction in address math; pass 6 doesn't evaluate it yet");
   r.reject<DotScaledOp, ReshapeOp, CatOp, JoinOp, SplitOp, ScanOp, ScanReturnOp,
            MapElementwiseOp, MapElementwiseReturnOp>(
       "no Atlas pattern for this op");

@@ -94,6 +94,7 @@ ROWS = [
     row("add_16", kernels.add_16, {"X": BF16, "Y": BF16}),
     row("add_rows_50", kernels.add_rows_50, {"X": BF16, "Y": BF16}),
     row("add_64x16", kernels.add_64x16, {"X": BF16, "Y": BF16}),
+    row("tail_mask_k_loop", kernels.tail_mask_k_loop, {"X": BF16, "Y": BF16, "K": "constexpr"}, constexprs={"K": 64}),
     row("copy_16", kernels.copy_16, {"X": BF16, "Y": BF16}),
     row("copy_rows_50", kernels.copy_rows_50, {"X": BF16, "Y": BF16}),
 ]
