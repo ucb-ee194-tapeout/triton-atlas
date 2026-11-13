@@ -21,12 +21,14 @@ tt.func @unused_scalar(%eps: f32, %p: !tt.ptr<f32>, %n: i32, %stride: i32) {
 
 // -----
 
-// BF16 <-> f32 conversions, as arith.extf, arith.truncf and tt.fp_to_fp.
+// BF16 <-> f32 conversions, as arith.extf, arith.truncf and tt.fp_to_fp. A widening tt.fp_to_fp may carry any
+// rounding mode: widening is exact, so only narrowing must round to nearest even.
 // CHECK-LABEL: tt.func @conversions
 // CHECK: tt.load %{{.*}} {ttatlas.host_dtype = bf16}
 // CHECK: arith.extf
 // CHECK: arith.truncf
 // CHECK: tt.fp_to_fp
+// CHECK: tt.fp_to_fp %{{.*}}, rounding = rtz
 tt.func @conversions(%p: !tt.ptr<bf16>) {
   %r = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
   %ps = tt.splat %p : !tt.ptr<bf16> -> tensor<32x!tt.ptr<bf16>>
@@ -35,6 +37,7 @@ tt.func @conversions(%p: !tt.ptr<bf16>) {
   %f = arith.extf %x : tensor<32xbf16> to tensor<32xf32>
   %b = arith.truncf %f : tensor<32xf32> to tensor<32xbf16>
   %g = tt.fp_to_fp %b : tensor<32xbf16> -> tensor<32xf32>
+  %w = tt.fp_to_fp %b, rounding = rtz : tensor<32xbf16> -> tensor<32xf32>
   tt.return
 }
 
