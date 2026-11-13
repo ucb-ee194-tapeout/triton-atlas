@@ -40,6 +40,9 @@ inline constexpr llvm::StringLiteral kLayout =
     "ttatlas.layout"; // #ttatlas<layout ...>, on the module
 inline constexpr llvm::StringLiteral kDramBase =
     "ttatlas.dram_base"; // i64 input base address, on the module
+inline constexpr llvm::StringLiteral kFoldBiasIntoDot =
+    "ttatlas.fold_bias_into_dot"; // bool, on the module (backend option; pass
+                                  // 2)
 inline constexpr llvm::StringLiteral kKernel =
     "ttatlas.kernel"; // JSON string (schema v1), on the function (pass 7)
 // List of {pass, what, loc} entries, one per legalization a pass did (on the
