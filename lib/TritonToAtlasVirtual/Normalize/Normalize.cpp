@@ -39,7 +39,9 @@ LogicalResult unrollLoops(ModuleOp module) {
   for (scf::ForOp loop : loops) {
     std::optional<int64_t> lower = getConstantIntValue(loop.getLowerBound());
     std::optional<int64_t> upper = getConstantIntValue(loop.getUpperBound());
-    if (lower && upper && *lower >= *upper) {
+    // Signed comparison, as scf.for does unless it is marked unsignedCmp;
+    // an unsigned loop is left to loopUnrollFull.
+    if (lower && upper && !loop.getUnsignedCmp() && *lower >= *upper) {
       rewriter.replaceOp(loop, loop.getInitArgs());
       continue;
     }
