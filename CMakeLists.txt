@@ -167,16 +167,17 @@ target_link_libraries(
     PRIVATE
         $<TARGET_FILE:MLIRAtlas>
         "${LLVM_LIBRARY_DIR}/libMLIRFuncInlinerExtension.a"
-        MLIRLinalgDialect
-        MLIRLinalgTransforms
-        MLIRSCFDialect
-        MLIRSCFTransforms
-        MLIRTensorDialect
         -Wl,--no-undefined
         -Wl,--gc-sections
         -Wl,--no-as-needed
         "${TRITON_LIB}"
         -Wl,--as-needed
+        # MLIR libraries libtriton doesn't export (linalg, for passes 3-5). CMake adds their dependencies after
+        # them. They must come after libtriton: the linker then takes from them only what libtriton lacks, while
+        # before it they'd add second copies of MLIR code libtriton already has. Add a library here when a pass
+        # needs a dialect libtriton doesn't export; --no-undefined names what's missing.
+        MLIRLinalgDialect
+        MLIRLinalgTransforms
 )
 
 # clangd finds compile_commands.json at the repo root with no settings. Triton's setup.py links it the same way.

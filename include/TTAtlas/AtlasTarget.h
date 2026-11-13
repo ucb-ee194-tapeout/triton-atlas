@@ -6,13 +6,14 @@
 // place the hardware reaches into the passes.
 //
 // Sources: atlas-mlir at triton-atlas's pin (third_party/atlas-mlir,
-// 036ee09). Where atlas-mlir's own headers already define a fact (taken there
-// from the RTL), the constant here is that definition, so the two can't drift;
-// static_asserts below flag a change our slot ABI or tags depend on. For
-// hardware facts the taped-out RTL wins over any model or doc.
+// 8ee175c, its default branch). Where atlas-mlir's own headers already define a
+// fact (taken there from the RTL), the constant here is that definition, so the
+// two can't drift; static_asserts below flag a change our slot ABI or tags
+// depend on. For hardware facts the taped-out RTL wins over any model or doc.
 #ifndef TRITON_ATLAS_TTATLAS_ATLASTARGET_H
 #define TRITON_ATLAS_TTATLAS_ATLASTARGET_H
 
+#include "Atlas/AtlasGeneratedArtifact.h"
 #include "Atlas/AtlasMXUOwnership.h"
 #include "Atlas/AtlasTarget.h"
 
@@ -21,7 +22,7 @@
 namespace mlir::ttatlas::target {
 
 // Not defined as constants in atlas-mlir (only in its docs and code), so they
-// live here: the tile size, scale codes, IMEM size and DRAM window.
+// live here: the tile size, scale codes and DRAM window.
 //
 // Every virtual-IR value is one 32x32 tile; a 1-D value (a bias row, a row
 // reduction's result) is 32 long (docs/compiler-pipeline.md:109,
@@ -35,7 +36,7 @@ inline constexpr int64_t kSlotBytes = mlir::atlas::kAtlasBF16TileBytes;
 
 // Two matmul units, MXU0 and MXU1, each holding at most 2 weights and 2 live
 // accumulators per block (atlas::MXUOwnership::kUnits and kSlots,
-// include/Atlas/AtlasMXUOwnership.h:18; docs/dialect-reference.md:79,
+// include/Atlas/AtlasMXUOwnership.h:18; docs/dialect-reference.md:80,
 // docs/hardware-status.md:40).
 inline constexpr int kMxuUnits = mlir::atlas::MXUOwnership::kUnits;
 inline constexpr int kMxuWeightsPerUnit = mlir::atlas::MXUOwnership::kSlots;
@@ -46,8 +47,13 @@ inline constexpr int kMxuAccumulatorsPerUnit =
 inline constexpr int kScaleCodeMin = 122;
 inline constexpr int kScaleCodeMax = 128;
 
-// Instruction memory (docs/host-launch.md:29).
-inline constexpr int64_t kImemBytes = 128 * 1024;
+// The most instruction words one program may have at our pin: 2048 (8 KiB),
+// counting the delays that timing adds, although the IMEM holds 128 KiB
+// (include/Atlas/AtlasGeneratedArtifact.h:11-12, docs/host-launch.md:29). A
+// larger program fails in lowering (lib/AtlasVirtualToMachine.cpp:119) or
+// after timing (lib/AtlasGeneratedSchedule.cpp:34). Nothing uses it yet; a
+// check that bounds the unrolled program size should.
+inline constexpr int64_t kProgramWords = mlir::atlas::kAtlasGeneratedWordLimit;
 
 // DMA buffers must lie in [kDramWindowBegin, kDramWindowEnd), aligned to one
 // 1 KiB tensor register (lib/AtlasBoundaryABI.cpp:36-38, using
@@ -62,6 +68,9 @@ inline constexpr int64_t kDefaultDramBase = 0x9000'0000;
 static_assert(
     kSlotBytes == 2048 && kDramAlignment == 1024,
     "atlas-mlir's tile or register size changed: recheck the slot ABI");
+static_assert(kProgramWords == 2048,
+              "atlas-mlir's program limit changed: recheck K-loop unrolling "
+              "(passes 2 and 4)");
 static_assert(kMxuUnits == 2,
               "atlas-mlir's MXU count changed: recheck ttatlas.mxu and pass 4");
 
