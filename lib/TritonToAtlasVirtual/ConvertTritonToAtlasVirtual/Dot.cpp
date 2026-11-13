@@ -122,6 +122,13 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
                        logicalTranspose->getName().getStringRef() ==
                            "linalg.transpose" &&
                        isPackedFP8Tile(logicalTranspose->getOperand(0)));
+  // The matmul lowering below emits the XLU transpose itself for this case.
+  // Mark the source linalg op for removal so its generic rejection pattern
+  // cannot run afterward on an operation whose only semantic use is gone.
+  bool consumePackedTranspose =
+      packedWeight && logicalTranspose &&
+      logicalTranspose->getName().getStringRef() == "linalg.transpose" &&
+      logicalTranspose->getResult(0).hasOneUse();
   if ((!role || (*role != Role::weight_fp8_nk &&
                  *role != Role::weight_fp8_kn)) &&
       !packedWeight)
@@ -180,6 +187,16 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
           builder.getNamedAttr("unit", builder.getI32IntegerAttr(*unit))});
 
   rewriter.replaceOp(matmul, lowered->getResults());
+  if (consumePackedTranspose) {
+    Value destination = logicalTranspose->getNumOperands() > 1
+                            ? logicalTranspose->getOperand(1)
+                            : Value();
+    rewriter.eraseOp(logicalTranspose);
+    if (Operation *empty = destination ? destination.getDefiningOp() : nullptr;
+        empty && empty->getName().getStringRef() == "tensor.empty" &&
+        empty->use_empty())
+      rewriter.eraseOp(empty);
+  }
   // The zero fill stays: other matmuls may share it (CSE merges equal fills),
   // and the driver sweeps it once nothing reads it.
   return success();
