@@ -202,6 +202,7 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
       int64_t nextInput = 0, nextOutput = 0;
       bool sawStore = false;
       SmallVector<ttatlas::SlotAttr> inputSlots, outputSlots;
+      SmallVector<std::optional<ttatlas::PadNeutral>> inputNeutrals;
       llvm::DenseMap<unsigned, int64_t> argumentWidths;
       SmallVector<BoundaryTile> tiles;
       llvm::SmallPtrSet<Operation *, 32> scaffolding;
@@ -251,7 +252,8 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
             return;
           }
           auto tensor = dyn_cast<RankedTensorType>(ptr.getType());
-          if (!tensor || tensor.getRank() != 2 || !tensor.hasStaticShape()) {
+          if (!tensor || (tensor.getRank() != 2 && tensor.getRank() != 1) ||
+              !tensor.hasStaticShape()) {
             reject("expected a static 32x32 tensor of pointers; 1-D bias needs "
                    "the Stage B driver-broadcast contract");
             return;
@@ -277,19 +279,30 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
           if (!pad)
             pad = op->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad);
           if (store && !pad)
-            if (Operation *producer = store.getValue().getDefiningOp())
+            if (Operation *producer = tile.value.getDefiningOp()) {
               pad = producer->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad);
+              tilePad = bool(pad);
+            }
+          const bool biasRow = tensor.getRank() == 1;
+          if (biasRow && (!element.isBF16() || !host.getValue().isBF16())) {
+            reject("1-D bias slots require BF16 host and tile elements");
+            return;
+          }
+          if (biasRow)
+            logicalShape = {1, 32};
           if (pad) {
             auto shape = pad.getLogicalShape();
-            bool full = shape.size() == 2;
-            for (unsigned axis = 0; full && axis < 2; ++axis)
-              full = tilePad ? shape[axis] == 32
-                             : shape[axis] <= tensor.getDimSize(axis) &&
-                                   shape[axis] >= tile.offsets[axis] + 32;
-            if (!full) {
-              reject("partial padded boundaries require Stage B packing "
-                     "semantics");
-              return;
+            for (unsigned axis = 0; axis < 2; ++axis) {
+              int64_t extent = biasRow
+                                   ? (axis == 0 ? 1 : 32)
+                                   : (tilePad ? 32 : tensor.getDimSize(axis));
+              int64_t offset = tilePad || biasRow ? 0 : tile.offsets[axis];
+              if (shape.size() != 2 || shape[axis] > extent ||
+                  shape[axis] <= offset) {
+                reject("padding logical shape is outside the boundary extent");
+                return;
+              }
+              logicalShape[axis] = std::min<int64_t>(32, shape[axis] - offset);
             }
           }
           if (load && sawStore) {
@@ -297,7 +310,7 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
             return;
           }
           sawStore |= bool(store);
-          const int64_t width = tensor.getDimSize(1);
+          const int64_t width = biasRow ? 32 : tensor.getDimSize(1);
           auto origin = pointerAt(ptr, tile.offsets, func);
           if (!origin) {
             reject("cannot prove a static pointer expression rooted in a "
@@ -310,16 +323,19 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
               width >
                   (std::numeric_limits<int64_t>::max() - origin->offset - 31) /
                       31 ||
-              origin->offset % width > width - 32) {
+              (!biasRow && origin->offset % width > width - 32)) {
             reject(
                 "tile offset must be nonnegative, row-aligned, and fit signed "
                 "i64");
             return;
           }
-          for (int64_t row = 0; row < 32; ++row)
+          for (int64_t row = 0; row < (biasRow ? 1 : 32); ++row)
             for (int64_t col = 0; col < 32; ++col) {
-              auto lane = pointerAt(
-                  ptr, {tile.offsets[0] + row, tile.offsets[1] + col}, func);
+              Coordinates coordinates =
+                  biasRow ? Coordinates{col}
+                          : Coordinates{tile.offsets[0] + row,
+                                        tile.offsets[1] + col};
+              auto lane = pointerAt(ptr, coordinates, func);
               if (!lane || lane->argument != origin->argument ||
                   lane->offset != origin->offset + row * width + col) {
                 reject(
@@ -334,7 +350,9 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
             reject("one pointer argument has incompatible host row widths");
             return;
           }
-          auto role = load ? roleFor(tile.value)
+          auto role = load ? (biasRow ? std::optional<ttatlas::SlotRole>(
+                                            ttatlas::SlotRole::bias_bf16)
+                                      : roleFor(tile.value))
                            : std::optional<ttatlas::SlotRole>(
                                  ttatlas::SlotRole::output_bf16);
           if (!role) {
@@ -351,8 +369,10 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
           MLIRContext *context = op->getContext();
           auto tileOrigin = AffineMapAttr::get(AffineMap::get(
               0, 6,
-              {getAffineConstantExpr(origin->offset / width, context),
-               getAffineConstantExpr(origin->offset % width, context)},
+              {getAffineConstantExpr(biasRow ? 0 : origin->offset / width,
+                                     context),
+               getAffineConstantExpr(
+                   biasRow ? origin->offset : origin->offset % width, context)},
               context));
           int64_t index = load ? nextInput : nextOutput;
           // Input reuse includes source argument, exact origin, role, shape and
@@ -368,7 +388,9 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
             }
             if (previous.getRole() != *role ||
                 previous.getLogicalShape() != ArrayRef<int64_t>(logicalShape) ||
-                previous.getHostDtype() != host.getValue()) {
+                previous.getHostDtype() != host.getValue() ||
+                inputNeutrals[previous.getIndex()] !=
+                    (pad ? std::optional(pad.getNeutral()) : std::nullopt)) {
               reject("one logical input tile has incompatible roles or host "
                      "representations");
               return;
@@ -393,6 +415,8 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
           if (load && index == nextInput) {
             ++nextInput;
             inputSlots.push_back(slot);
+            inputNeutrals.push_back(pad ? std::optional(pad.getNeutral())
+                                        : std::nullopt);
           }
           if (store) {
             ++nextOutput;

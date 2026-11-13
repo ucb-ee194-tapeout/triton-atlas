@@ -46,6 +46,7 @@ struct ConvertBoundary : OpConversionPattern<FuncOp> {
       return reject("expected tt.return at the kernel boundary");
 
     std::map<int32_t, std::pair<ttatlas::SlotAttr, Type>> inputs;
+    std::map<int32_t, ttatlas::PadAttr> inputPadding;
     SmallVector<int32_t> outputs;
     llvm::SmallPtrSet<Operation *, 32> inputTags;
     SmallVector<BoundaryTile> tiles;
@@ -84,12 +85,25 @@ struct ConvertBoundary : OpConversionPattern<FuncOp> {
         return reject("boundary tile is missing #ttatlas.slot from Pass 6");
       if (slot.getArg() < 0 || slot.getArg() >= source.getNumArguments() ||
           !isa<PointerType>(source.getArgument(slot.getArg()).getType()) ||
-          slot.getLogicalShape() != ArrayRef<int64_t>{32, 32})
+          llvm::any_of(slot.getLogicalShape(),
+                       [](int64_t size) { return size < 1 || size > 32; }))
         return reject("slot argument or logical shape is incompatible with the "
                       "M1 boundary ABI");
       auto tensor = dyn_cast<RankedTensorType>(tile.value.getType());
       if (isa<LoadOp>(tile.memory)) {
         inputTags.insert(tile.tag);
+        auto pad = boundaryPad(tile);
+        auto shape = slot.getLogicalShape();
+        bool biasRow = tensor && tensor.getRank() == 1;
+        if (biasRow &&
+            (slot.getRole() != ttatlas::SlotRole::bias_bf16 || shape[0] != 1))
+          return reject("rank-one input requires a bias_bf16 row slot");
+        if (!biasRow && shape != ArrayRef<int64_t>{32, 32} && !pad)
+          return reject("partial input slot requires Pass 4 padding neutral");
+        if (auto it = inputPadding.find(slot.getIndex());
+            it != inputPadding.end() && it->second != pad)
+          return reject("reused input slot has conflicting padding neutrals");
+        inputPadding[slot.getIndex()] = pad;
         if (!tensor || !isBoundaryTile(tensor) ||
             (!tensor.getElementType().isBF16() &&
              !isa<Float8E4M3FNType>(tensor.getElementType())) ||
@@ -212,6 +226,11 @@ struct ConvertBoundary : OpConversionPattern<FuncOp> {
       input.addTypes({stateType, tile});
       input.addAttribute("index", rewriter.getI32IntegerAttr(index));
       input.addAttribute(ttatlas::kSlot, slot);
+      if (auto pad = inputPadding[index])
+        input.addAttribute(ttatlas::kPad,
+                           ttatlas::PadAttr::get(source.getContext(),
+                                                 pad.getNeutral(),
+                                                 slot.getLogicalShape()));
       Operation *created = rewriter.create(input);
       state = created->getResult(0);
       inputValues[index] = created->getResult(1);

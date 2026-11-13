@@ -15,7 +15,8 @@ class TTAtlas_Attr<string name, string attrMnemonic> : AttrDef<TTAtlas_Dialect, 
   let genVerifyDecl = 1;
 }
 
-// On each direct tile tt.load / tt.store or boundary extract_slice / insert_slice, set by ttatlas-assign-slots (pass 6), read by pass 7.
+// On each direct tile tt.load / tt.store or boundary extract_slice /
+// insert_slice, set by ttatlas-assign-slots (pass 6), read by pass 7.
 def TTAtlas_SlotAttr : TTAtlas_Attr<"Slot", "slot"> {
   let summary = "the DRAM slot a load or store moves, and where its tile sits in the host tensor";
   let description = [{

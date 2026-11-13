@@ -52,6 +52,26 @@ class SliceContractTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.count("logical_shape = [32, 32], host_dtype"), 5)
 
+    def test_parent_partial_shape_is_intersected(self):
+        source = SOURCE.replace(
+            "ttatlas.host_dtype = bf16", "ttatlas.host_dtype = bf16, "
+            "ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [17, 47]>")
+        source = source.replace(
+            "ttatlas.host_dtype = f32", "ttatlas.host_dtype = f32, "
+            "ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [17, 47]>")
+        result = self.run_pass(source, "--ttatlas-assign-slots", "--ttatlas-verify-contract=stage=6")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count("logical_shape = [17, 32], host_dtype"), 3)
+        self.assertEqual(result.stdout.count("logical_shape = [17, 15], host_dtype"), 2)
+
+    def test_invalid_pad_extent_is_rejected(self):
+        source = SOURCE.replace(
+            "ttatlas.host_dtype = bf16", "ttatlas.host_dtype = bf16, "
+            "ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [33, 64]>")
+        result = self.run_pass(source, "--ttatlas-assign-slots")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("outside the boundary extent", result.stderr)
+
     def test_stage6_requires_slice_slots(self):
         result = self.run_pass(SOURCE, '--ttatlas-verify-contract=stage=6')
         self.assertNotEqual(result.returncode, 0)

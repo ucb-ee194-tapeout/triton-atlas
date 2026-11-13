@@ -1,5 +1,5 @@
-// RUN: not triton-atlas-opt %s --ttatlas-assign-slots 2>&1 | FileCheck %s
-// CHECK: partial padded boundaries require Stage B packing semantics
+// RUN: triton-atlas-opt %s --ttatlas-assign-slots | FileCheck %s
+// CHECK: logical_shape = [16, 32], host_dtype = bf16
 module {
   tt.func @tile(%a: !tt.ptr<bf16>) {
     %r = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>

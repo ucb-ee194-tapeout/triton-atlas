@@ -17,9 +17,22 @@ struct BoundaryTile {
   SmallVector<int64_t, 2> offsets;
 };
 
+inline ttatlas::PadAttr boundaryPad(const BoundaryTile &tile) {
+  if (auto pad = tile.tag->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad))
+    return pad;
+  if (auto pad = tile.memory->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad))
+    return pad;
+  if (isa<StoreOp>(tile.memory))
+    if (Operation *producer = tile.value.getDefiningOp())
+      return producer->getAttrOfType<ttatlas::PadAttr>(ttatlas::kPad);
+  return {};
+}
+
 inline bool isBoundaryTile(Type type) {
   auto tensor = dyn_cast<RankedTensorType>(type);
-  return tensor && tensor.getShape() == ArrayRef<int64_t>{32, 32};
+  return tensor && (tensor.getShape() == ArrayRef<int64_t>{32, 32} ||
+                    (tensor.getShape() == ArrayRef<int64_t>{32} &&
+                     tensor.getElementType().isBF16()));
 }
 
 template <typename Slice> bool isConstantBoundarySlice(Slice slice) {
@@ -53,9 +66,10 @@ collectBoundaryTiles(triton::FuncOp function,
           &op, "volatile loads cannot be represented by an input slot");
     Value value = load ? load.getResult() : store.getValue();
     auto type = dyn_cast<RankedTensorType>(value.getType());
-    if (type && type.getRank() == 1)
-      return ttatlas::emitUnsupported(
-          &op, "1-D bias needs the Stage B driver-broadcast contract");
+    if (load && isBoundaryTile(type) && type.getRank() == 1) {
+      tiles.push_back({&op, &op, value, {0}});
+      continue;
+    }
     if (!type || type.getRank() != 2 || !type.hasStaticShape() ||
         type.getDimSize(0) < 32 || type.getDimSize(1) < 32)
       return ttatlas::emitUnsupported(
