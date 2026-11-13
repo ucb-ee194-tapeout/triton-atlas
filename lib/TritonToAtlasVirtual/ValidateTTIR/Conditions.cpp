@@ -111,15 +111,23 @@ LogicalResult checkStore(StoreOp store, EmitFn emit) {
 }
 
 // BF16 to f32 or back. FP8 is out until a rule picks the scale code (FP8
-// E4M3 saturates above 448).
+// E4M3 saturates above 448). Narrowing must round to nearest even: that is
+// what arith.truncf (pass 3) and Atlas do, so another tt.fp_to_fp rounding
+// would change results silently.
 LogicalResult checkConversion(Operation *op, EmitFn emit) {
   Type from = getElementTypeOrSelf(op->getOperand(0).getType());
   Type to = getElementTypeOrSelf(op->getResult(0).getType());
-  if ((from.isBF16() && to.isF32()) || (from.isF32() && to.isBF16()))
-    return success();
-  return fail(emit, "converts " + printed(from) + " to " + printed(to) +
-                        "; only BF16 <-> f32 is accepted (no FP8 scale-code "
-                        "rule yet)");
+  if (!(from.isBF16() && to.isF32()) && !(from.isF32() && to.isBF16()))
+    return fail(emit, "converts " + printed(from) + " to " + printed(to) +
+                          "; only BF16 <-> f32 is accepted (no FP8 "
+                          "scale-code rule yet)");
+  if (auto fpToFp = dyn_cast<FpToFpOp>(op))
+    if (std::optional<RoundingMode> rounding = fpToFp.getRounding();
+        rounding && *rounding != RoundingMode::RTNE)
+      return fail(emit, "narrows with rounding " +
+                            stringifyRoundingMode(*rounding) +
+                            "; Atlas rounds to nearest even (rtne) only");
+  return success();
 }
 
 LogicalResult checkDivF(arith::DivFOp divf, EmitFn emit) {
