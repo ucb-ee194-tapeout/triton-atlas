@@ -360,12 +360,9 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
                 "cannot infer a unique activation/weight role from dot uses");
             return;
           }
-          if (pad && load && pad.getNeutral() == ttatlas::PadNeutral::neg_inf)
-            role = ttatlas::SlotRole::mask_bf16;
-          if (*role == ttatlas::SlotRole::mask_bf16 && !element.isBF16()) {
-            reject("a mask slot requires BF16 elements");
-            return;
-          }
+          // The pad tag says what the host puts in the padded lanes of a data
+          // tile; it never changes the tile's role. A mask slot comes from a
+          // ttatlas.mask_apply constant, not from a pad value.
           MLIRContext *context = op->getContext();
           auto tileOrigin = AffineMapAttr::get(AffineMap::get(
               0, 6,

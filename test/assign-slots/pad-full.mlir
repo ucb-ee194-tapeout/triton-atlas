@@ -1,5 +1,8 @@
 // RUN: triton-atlas-opt %s --ttatlas-assign-slots | FileCheck %s
-// CHECK: role = mask_bf16
+// A data tile whose padded lanes the host fills with -inf (a row max reads it) stays a data slot: the role never comes
+// from the pad value, which the manifest carries as the slot's fill. (This test used to expect mask_bf16.)
+// CHECK: role = constant_bf16
+// CHECK-NOT: mask_bf16
 module {
   tt.func @tile(%a: !tt.ptr<bf16>) {
     %r = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>

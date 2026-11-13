@@ -42,7 +42,7 @@ class BufferTest(unittest.TestCase):
         self.assertEqual(metadata["outputs"][0]["logical_shape"], [16, 32])
         negative = self.compile(source.replace("neutral = zero", "neutral = neg_inf"))
         self.assertEqual(negative["inputs"][0]["pad_neutral"], "neg_inf")
-        self.assertEqual(negative["inputs"][0]["role"], "mask_bf16")
+        self.assertEqual(negative["inputs"][0]["role"], "constant_bf16")  # a pad value never sets a mask role
 
     def test_native_bias_slot(self):
         root = Path(__file__).parents[1] / "assign-slots"
