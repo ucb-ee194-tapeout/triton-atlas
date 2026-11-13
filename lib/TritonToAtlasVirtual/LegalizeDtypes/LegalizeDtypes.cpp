@@ -199,12 +199,25 @@ struct Bf16TypeConverter : TypeConverter {
   }
 };
 
+// The kernel signature's conversion: like Bf16TypeConverter, except that a
+// scalar float argument keeps its type. It is the host's value as the
+// launcher passes it, and pass 1 accepts one only unused, so retyping it would
+// change the kernel's interface for nothing.
+struct SignatureTypeConverter : TypeConverter {
+  SignatureTypeConverter() {
+    addConversion(
+        [](Type type) { return isa<FloatType>(type) ? type : toBf16(type); });
+  }
+};
+
 // Whether `op` already has only Atlas types: no f32 in its results, operands,
 // region arguments or, for a function, its signature.
 bool hasAtlasTypes(Operation *op, const TypeConverter &converter) {
-  if (auto func = dyn_cast<FuncOp>(op))
-    return converter.isSignatureLegal(func.getFunctionType()) &&
-           converter.isLegal(&func.getBody());
+  if (auto func = dyn_cast<FuncOp>(op)) {
+    SignatureTypeConverter signature;
+    return signature.isSignatureLegal(func.getFunctionType()) &&
+           signature.isLegal(&func.getBody());
+  }
   return converter.isLegal(op) &&
          llvm::all_of(op->getRegions(), [&](Region &region) {
            return converter.isLegal(&region);
@@ -312,7 +325,8 @@ LogicalResult retype(ModuleOp module,
   patterns.add<RetypeConstant, EraseIdentityCast<arith::ExtFOp>,
                EraseIdentityCast<arith::TruncFOp>>(converter, ctx,
                                                    /*benefit=*/2);
-  populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(patterns, converter);
+  static const SignatureTypeConverter signature;
+  populateFunctionOpInterfaceTypeConversionPattern<FuncOp>(patterns, signature);
   return applyPartialConversion(module, target, std::move(patterns));
 }
 

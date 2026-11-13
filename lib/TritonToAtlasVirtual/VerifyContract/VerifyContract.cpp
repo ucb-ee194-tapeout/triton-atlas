@@ -355,8 +355,14 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
         return;
       for (Region &region : op->getRegions())
         for (Block &block : region)
-          for (BlockArgument argument : block.getArguments())
+          for (BlockArgument argument : block.getArguments()) {
+            // An unused scalar float kernel argument is the host's value and
+            // keeps its type (pass 1 accepts one only unused).
+            if (isa<FuncOp>(op) && isa<FloatType>(argument.getType()) &&
+                argument.use_empty())
+              continue;
             check(argument);
+          }
     });
   }
 

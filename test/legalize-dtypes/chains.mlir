@@ -88,3 +88,12 @@ tt.func @pad_moves(%x: tensor<32x32xbf16>, %p: tensor<32x32x!tt.ptr<bf16>>) {
   tt.store %p, %y : tensor<32x32x!tt.ptr<bf16>>
   tt.return
 }
+
+// -----
+
+// An unused scalar f32 argument (Inductor passes such sizes and scales) keeps its type: it is the host's value.
+// CHECK-LABEL: tt.func @scalar_arg(%arg0: f32,
+tt.func @scalar_arg(%s: f32, %x: tensor<32x32xbf16>, %p: tensor<32x32x!tt.ptr<bf16>>) {
+  tt.store %p, %x : tensor<32x32x!tt.ptr<bf16>>
+  tt.return
+}
