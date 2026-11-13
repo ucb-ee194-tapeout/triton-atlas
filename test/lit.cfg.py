@@ -4,6 +4,7 @@
 # lit defines config before running this file.
 # ruff: noqa: F821
 import os
+import sys
 
 import lit.formats
 
@@ -18,3 +19,5 @@ config.environment["PATH"] = os.pathsep.join([
     os.path.join(os.environ["LLVM_INSTALL_DIR"], "bin"),
     os.environ["PATH"],
 ])
+# %PYTHON: the Python running lit (the venv's), for the Python tests in from-jit/.
+config.substitutions.append(("%PYTHON", sys.executable))
