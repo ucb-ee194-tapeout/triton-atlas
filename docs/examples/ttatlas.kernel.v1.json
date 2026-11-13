@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "name": "matmul_relu_kernel",
+  "dram_base": {
+    "input": 2415919104,
+    "output": 2415923200
+  },
+  "inputs": [
+    {
+      "index": 0,
+      "arg": 0,
+      "role": "activation_fp8",
+      "tile_origin": "affine_map<()[s0, s1, s2, s3, s4, s5] -> (0, 0)>",
+      "logical_shape": [
+        32,
+        32
+      ],
+      "host_dtype": "f8E4M3FN",
+      "layout": "row_major"
+    },
+    {
+      "index": 1,
+      "arg": 1,
+      "role": "weight_fp8_kn",
+      "tile_origin": "affine_map<()[s0, s1, s2, s3, s4, s5] -> (0, 0)>",
+      "logical_shape": [
+        32,
+        32
+      ],
+      "host_dtype": "f8E4M3FN",
+      "layout": "row_major"
+    }
+  ],
+  "outputs": [
+    {
+      "index": 0,
+      "arg": 2,
+      "role": "output_bf16",
+      "tile_origin": "affine_map<()[s0, s1, s2, s3, s4, s5] -> (0, 0)>",
+      "logical_shape": [
+        32,
+        32
+      ],
+      "host_dtype": "f32",
+      "layout": "row_major"
+    }
+  ],
+  "grid": [
+    1,
+    1,
+    1
+  ],
+  "legalized": []
+}

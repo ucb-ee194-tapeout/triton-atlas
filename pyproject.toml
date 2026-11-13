@@ -15,7 +15,10 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_LICENSES/*"]
 # The plugin is built against this Triton's headers and LLVM, and Triton's loader refuses a plugin built for another
 # version (triton v3.9.0 lib/Tools/PluginUtils.cpp:17-29, 60-64), so pip must install exactly this one.
-dependencies = ["triton==3.9.0"]
+dependencies = [
+    "jsonschema>=4.23,<5",
+    "triton==3.9.0",
+]
 
 [dependency-groups]
 # Build tools, at the versions in uv.lock. The format and lint tools aren't here: pre-commit installs its own, at the

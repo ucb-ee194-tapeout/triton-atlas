@@ -5,8 +5,10 @@ def AssignSlots : Pass<"ttatlas-assign-slots", "mlir::ModuleOp"> {
   let description = [{
     Out: one slot per distinct (pointer argument, constant tile slice): base and strides from the load's pointer
     math, tile_origin from the slice offset; #ttatlas.slot<index, arg, role, tile_origin, logical_shape, host_dtype>.
-    The only pass that numbers slots. Where the tag sits (on tt.load / tt.store, or on their slices) is still open;
-    the contract checker expects it on loads and stores until that is settled.
+    The only pass that numbers slots. Direct 32x32 accesses carry the tag on tt.load / tt.store.
+    Larger loads carry a tag on each constant 32x32 tensor.extract_slice; larger stores carry a tag
+    on each tensor.insert_slice in a disjoint, complete assembly of a fresh tensor.empty.
+    Slice origins include the parent pointer offset. Masks and dynamic or non-row-major accesses are rejected.
   }];
 
   // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.

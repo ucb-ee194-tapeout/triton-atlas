@@ -38,7 +38,8 @@ inline constexpr llvm::StringLiteral kMxu =
 inline constexpr llvm::StringLiteral kScale =
     "ttatlas.scale"; // i32 target::kScaleCode{Min,Max}, on an FP8 pack (pass 5)
 inline constexpr llvm::StringLiteral kSlot =
-    "ttatlas.slot"; // #ttatlas.slot, on loads and stores (pass 6)
+    "ttatlas.slot"; // #ttatlas.slot, on direct tile loads/stores or boundary
+                    // slices (pass 6)
 inline constexpr llvm::StringLiteral kPrecisionPolicy =
     "ttatlas.precision_policy"; // string, on the module
 inline constexpr llvm::StringLiteral kLayout =

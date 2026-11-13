@@ -3,6 +3,7 @@
 // lanes run it on hand-written fixtures. Contracts: triton-atlas design agenda,
 // each pass's page. Pass shape (one file, GEN_PASS_DEF, impl::...Base) follows
 // triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
+#include "TritonToAtlasVirtual/BoundaryTiles.h"
 #include "TritonToAtlasVirtual/LaneValues.h"
 #include "TritonToAtlasVirtual/Passes.h"
 
@@ -531,13 +532,23 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
     });
   }
 
-  // Pass 6: a slot on every load and store (until it is settled whether the
-  // tag moves to their slices).
+  // Pass 6: every logical boundary tile carries a slot. Large memory
+  // operations are represented by their constant extract/insert slices.
   void checkStage6(ModuleOp module) {
+    for (auto function : module.getOps<triton::FuncOp>()) {
+      SmallVector<BoundaryTile> tiles;
+      llvm::SmallPtrSet<Operation *, 32> scaffolding;
+      if (mlir::failed(collectBoundaryTiles(function, tiles, scaffolding))) {
+        broken(function, "invalid boundary tile coverage");
+        continue;
+      }
+      for (const auto &tile : tiles)
+        if (!tile.tag->getAttrOfType<tta::SlotAttr>(tta::kSlot))
+          broken(tile.tag, "missing #ttatlas.slot");
+    }
     module.walk([&](Operation *op) {
-      if (isa<LoadOp, StoreOp>(op) &&
-          !op->getAttrOfType<tta::SlotAttr>(tta::kSlot))
-        broken(op, "missing #ttatlas.slot");
+      if (isa<LoadOp, StoreOp>(op) && !isa<triton::FuncOp>(op->getParentOp()))
+        broken(op, "nested boundary memory operation");
     });
   }
 
