@@ -3,6 +3,7 @@
 // lanes run it on hand-written fixtures. Contracts: triton-atlas design agenda,
 // each pass's page. Pass shape (one file, GEN_PASS_DEF, impl::...Base) follows
 // triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
+#include "TritonToAtlasVirtual/LaneValues.h"
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "TTAtlas/AtlasTarget.h"
@@ -52,6 +53,25 @@ bool isMatmul(Operation *op) {
 }
 bool isFill(Operation *op) {
   return op->getName().getStringRef() == "linalg.fill";
+}
+// The readout marker pass 5 puts after a matmul chain: a linalg.generic with
+// one input and one output whose body is one arith.truncf from f32 to BF16.
+bool isReadout(Operation *op) {
+  if (op->getName().getStringRef() != "linalg.generic" ||
+      op->getNumOperands() != 2 || op->getNumRegions() != 1)
+    return false;
+  auto maps = op->getAttrOfType<ArrayAttr>("indexing_maps");
+  if (!maps || !llvm::all_of(maps, [](Attribute map) {
+        return cast<AffineMapAttr>(map).getValue().isIdentity();
+      }))
+    return false;
+  Block &body = op->getRegion(0).front();
+  auto narrow = dyn_cast<arith::TruncFOp>(&body.front());
+  return body.getOperations().size() == 2 && narrow &&
+         narrow.getIn() == body.getArgument(0) &&
+         body.getTerminator()->getOperand(0) == narrow.getResult() &&
+         narrow.getIn().getType().isF32() && narrow.getType().isBF16() &&
+         getElementTypeOrSelf(op->getResult(0).getType()).isBF16();
 }
 // Inside a linalg op's body: scalar code that the op's own checks cover.
 bool inLinalgBody(Operation *op) {
@@ -175,6 +195,28 @@ bool isCroppedTiles(Value value) {
     if (llvm::divideCeil(kept, target::kTileSize) * target::kTileSize != whole)
       return false;
   return isTile(source) || builtFromTiles(crop.getSource());
+}
+
+// The tiles of a stored value and where each sits, as [row, col]: the value
+// itself when it is one tile, else the constant tile insert_slices that build
+// it. Each tile is the op that yields it (null for a block argument). Empty
+// when the value has neither form.
+SmallVector<std::pair<Operation *, std::pair<int64_t, int64_t>>>
+storedTiles(Value value) {
+  SmallVector<std::pair<Operation *, std::pair<int64_t, int64_t>>> tiles;
+  if (isTile(value.getType())) {
+    tiles.push_back({value.getDefiningOp(), {0, 0}});
+    return tiles;
+  }
+  if (!builtFromTiles(value))
+    return tiles;
+  while (auto insert = value.getDefiningOp<tensor::InsertSliceOp>()) {
+    ArrayRef<int64_t> offset = insert.getStaticOffsets();
+    tiles.push_back({insert.getSource().getDefiningOp(),
+                     {offset.size() > 1 ? offset[0] : 0, offset.back()}});
+    value = insert.getDest();
+  }
+  return tiles;
 }
 
 bool isFloatTensor(Type type) {
@@ -367,11 +409,61 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
     });
   }
 
+  // Pass 4 promised that the producer of every stored tile with padded lanes
+  // carries a ttatlas.pad tag (the tile's logical shape, for pass 6). Pass 5
+  // erases casts and pass-through generics, so a tag that did not move with
+  // its value is lost here. The real lanes of the store are its crop from the
+  // origin, cut down by its mask, and a tile is partial when they do not
+  // fill it.
+  void checkBoundaryTags(ModuleOp module) {
+    module.walk([&](StoreOp store) {
+      Value value = store.getValue();
+      auto type = dyn_cast<RankedTensorType>(value.getType());
+      if (!type || type.getRank() > 2)
+        return;
+      SmallVector<int64_t> real(type.getShape());
+      if (auto crop = value.getDefiningOp<tensor::ExtractSliceOp>();
+          crop &&
+          llvm::all_of(crop.getMixedOffsets(),
+                       [](OpFoldResult at) { return isZeroInteger(at); }) &&
+          crop.getType().hasStaticShape() &&
+          crop.getType().getRank() == crop.getSourceType().getRank()) {
+        real.assign(crop.getType().getShape().begin(),
+                    crop.getType().getShape().end());
+        value = crop.getSource();
+      }
+      if (Value mask = store.getMask())
+        if (std::optional<SmallVector<int64_t>> bounds = maskBounds(mask);
+            bounds && bounds->size() == real.size())
+          for (auto [at, bound] : llvm::zip(real, *bounds))
+            at = std::min(at, bound);
+      for (auto [producer, offset] : storedTiles(value)) {
+        SmallVector<int64_t> origin = {offset.first, offset.second};
+        if (real.size() == 1)
+          origin = {offset.second};
+        bool partial = false, empty = false;
+        for (auto [axis, at] : llvm::enumerate(real)) {
+          int64_t inside = at - origin[axis];
+          empty |= inside <= 0;
+          partial |= inside < target::kTileSize;
+        }
+        // A rank-1 tile is a row of 32 lanes.
+        if (partial && !empty && (!producer || !producer->hasAttr(tta::kPad)))
+          broken(store, "a stored tile with padded lanes has no ttatlas.pad "
+                        "on the op that produces it");
+      }
+    });
+  }
+
   // Pass 5: FP8 matmul inputs; every other float value or pointer is BF16 or
-  // FP8. A matmul chain's accumulator stays in the MXU, so the matmuls, the
-  // linalg.fill that seeds them and what that fill reads and writes may be f32.
+  // FP8, inside linalg bodies too. A matmul chain's accumulator stays in the
+  // MXU, so the matmuls, the linalg.fill that seeds them and what that fill
+  // reads and writes may be f32; each chain's last matmul feeds exactly one
+  // readout marker, a linalg.generic{arith.truncf f32 -> bf16}, whose body
+  // reads that f32.
   void checkStage5(ModuleOp module) {
-    llvm::SmallPtrSet<Operation *, 16> accumulator;
+    checkBoundaryTags(module);
+    llvm::SmallPtrSet<Operation *, 16> accumulator, readouts;
     module.walk([&](Operation *op) {
       if (!isMatmul(op))
         return;
@@ -389,15 +481,53 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
               def && llvm::all_of(def->getUsers(), isFill))
             accumulator.insert(def);
       }
+      // The chain's last matmul: no matmul accumulates onto it.
+      bool continued = llvm::any_of(op->getUses(), [](OpOperand &use) {
+        return isMatmul(use.getOwner()) &&
+               use.getOperandNumber() == use.getOwner()->getNumOperands() - 1;
+      });
+      if (continued)
+        return;
+      if (op->hasOneUse() && isReadout(*op->user_begin()))
+        readouts.insert(*op->user_begin());
+      else
+        broken(op, "the chain's last linalg.matmul doesn't feed exactly one "
+                   "readout (linalg.generic{arith.truncf f32 -> bf16})");
     });
     module.walk([&](Operation *op) {
-      if (inLinalgBody(op) || accumulator.contains(op))
+      if (accumulator.contains(op))
         return;
-      forEachValue(op, [&](Value value) {
+      for (Operation *parent = op->getParentOp(); parent;
+           parent = parent->getParentOp())
+        if (accumulator.contains(parent) || readouts.contains(parent))
+          return;
+      auto check = [&](Value value) {
         FloatType element = floatElement(value.getType());
         if (element && !element.isBF16() && !isFp8(element))
           broken(op, "float value or pointer is neither BF16 nor FP8");
-      });
+      };
+      for (Value result : op->getResults())
+        check(result);
+      if (readouts.contains(op))
+        return;
+      // Only the chain and its readout may read the f32 accumulator; anything
+      // else (a partial sum stored as is) would need f32 outside the MXU.
+      // Other f32 values are flagged where they are defined.
+      for (Value operand : op->getOperands())
+        if (Operation *def = operand.getDefiningOp();
+            def && accumulator.contains(def) && isMatmul(def))
+          broken(op, "reads a matmul chain's f32 accumulator outside its "
+                     "chain and readout");
+      for (Region &region : op->getRegions())
+        for (Block &block : region)
+          for (BlockArgument argument : block.getArguments()) {
+            // An unused scalar float kernel argument is the host's value and
+            // keeps its type (pass 1 accepts one only unused).
+            if (isa<FuncOp>(op) && isa<FloatType>(argument.getType()) &&
+                argument.use_empty())
+              continue;
+            check(argument);
+          }
     });
   }
 
