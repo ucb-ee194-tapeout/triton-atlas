@@ -47,3 +47,19 @@ tt.func @row_min(%x: tensor<32x32xf32>) -> tensor<32xf32> {
   }) : (tensor<32x32xf32>) -> tensor<32xf32>
   tt.return %r : tensor<32xf32>
 }
+
+// -----
+
+// An integer reduction isn't compute pass 3 converts (pass 1 rejects one before this); it stays TTIR and passes the
+// stage-3 check, which flags only float compute left over.
+// CHECK-LABEL: tt.func @int_sum
+// CHECK: "tt.reduce"
+// CHECK-NOT: linalg.reduce
+tt.func @int_sum(%x: tensor<32x32xi32>) -> tensor<32xi32> {
+  %r = "tt.reduce"(%x) <{axis = 1 : i32}> ({
+  ^bb0(%a: i32, %b: i32):
+    %s = arith.addi %a, %b : i32
+    tt.reduce.return %s : i32
+  }) : (tensor<32x32xi32>) -> tensor<32xi32>
+  tt.return %r : tensor<32xi32>
+}
