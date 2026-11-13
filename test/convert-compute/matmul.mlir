@@ -1,4 +1,8 @@
 // RUN: triton-atlas-opt %s --split-input-file --convert-triton-compute-to-linalg --ttatlas-verify-contract=stage=3 | FileCheck %s
+// RUN: triton-atlas-opt %s --split-input-file --convert-triton-compute-to-linalg | FileCheck %s --check-prefix=NO-TAG
+
+// ttatlas.k_chain ends at this pass: no op in any case carries it afterwards.
+// NO-TAG-NOT: ttatlas.k_chain
 
 // Matmul group: tt.dot becomes linalg.fill zero + linalg.matmul, tt.trans becomes linalg.transpose. Input is pass 2's
 // form (hand-written): accumulators zero, or the previous dot of a tagged K chain.
@@ -48,6 +52,17 @@ tt.func @k_chain(%a0: tensor<32x32xf8E4M3FN>, %b0: tensor<32x32xf8E4M3FN>, %a1: 
 // CHECK: tt.return
 tt.func @bias_accumulator(%x: tensor<32x32xf8E4M3FN>, %w: tensor<32x32xf8E4M3FN>, %bias: tensor<32x32xf32>) -> tensor<32x32xf32> {
   %d = tt.dot %x, %w, %bias : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
+  tt.return %d : tensor<32x32xf32>
+}
+
+// -----
+
+// Other ttatlas tags move from the dot onto its matmul (here ttatlas.mxu, which pass 4 normally sets).
+// CHECK-LABEL: tt.func @tag_moves
+// CHECK: linalg.matmul {ttatlas.mxu = 0 : i32}
+tt.func @tag_moves(%x: tensor<32x32xf8E4M3FN>, %w: tensor<32x32xf8E4M3FN>) -> tensor<32x32xf32> {
+  %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
+  %d = tt.dot %x, %w, %zero {ttatlas.mxu = 0 : i32} : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
   tt.return %d : tensor<32x32xf32>
 }
 
