@@ -211,3 +211,28 @@ func.func @row_max_40_from_input(%x: tensor<32x40xf32>) -> tensor<32xf32> {
   }
   return %r : tensor<32xf32>
 }
+
+// -----
+
+// A matmul that needs padding (K of 16) feeding a ReLU of two row tiles: the matmul is not fused into the ReLU's tiles
+// (a fused clone is only tiled), so it is padded on its own and every matmul reads whole tiles.
+#id = affine_map<(d0, d1) -> (d0, d1)>
+// CHECK-LABEL: func.func @matmul_k16_then_relu
+// CHECK: ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [64, 16]>
+// CHECK: ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 32]>
+// CHECK-COUNT-2: linalg.matmul {{.*}}ins(%{{.*}}, %{{.*}} : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>)
+func.func @matmul_k16_then_relu(%a: tensor<64x16xf8E4M3FN>, %b: tensor<16x32xf8E4M3FN>) -> tensor<64x32xf32> {
+  %zero = arith.constant 0.0 : f32
+  %empty = tensor.empty() : tensor<64x32xf32>
+  %init = linalg.fill ins(%zero : f32) outs(%empty : tensor<64x32xf32>) -> tensor<64x32xf32>
+  %m = linalg.matmul ins(%a, %b : tensor<64x16xf8E4M3FN>, tensor<16x32xf8E4M3FN>)
+                     outs(%init : tensor<64x32xf32>) -> tensor<64x32xf32>
+  %out = tensor.empty() : tensor<64x32xf32>
+  %r = linalg.generic {indexing_maps = [#id, #id], iterator_types = ["parallel", "parallel"]}
+      ins(%m : tensor<64x32xf32>) outs(%out : tensor<64x32xf32>) {
+  ^bb0(%x: f32, %o: f32):
+    %mx = arith.maximumf %x, %zero : f32
+    linalg.yield %mx : f32
+  } -> tensor<64x32xf32>
+  return %r : tensor<64x32xf32>
+}

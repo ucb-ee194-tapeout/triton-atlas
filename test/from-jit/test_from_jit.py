@@ -72,6 +72,7 @@ ROWS = [
         passes_ok=0, first_error=r"unsupported tt\.trans: transposes bf16"),
     row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16}),
     row("matmul_relu_64x32", kernels.matmul_relu_64x32, {"A": FP8, "Bm": FP8, "C": BF16}),
+    row("row_sum_scaled_64x16", kernels.row_sum_scaled_64x16, {"X": BF16, "Y": BF16}),
     row("row_max_64", kernels.row_max_64, {"X": BF16, "Y": BF16}),
     row("add_16", kernels.add_16, {"X": BF16, "Y": BF16}),
     row("add_rows_50", kernels.add_rows_50, {"X": BF16, "Y": BF16}),

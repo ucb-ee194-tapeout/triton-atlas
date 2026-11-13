@@ -142,6 +142,16 @@ def matmul_relu_64x32(A, Bm, C):
     tl.store(C + m[:, None] * 32 + n[None, :], tl.maximum(tl.dot(a, b), 0.0).to(tl.bfloat16))
 
 
+# A row sum over 16 columns, scaled: the reduction (loops 64x16) needs padding and is fused into the 64-row scale's
+# tiles. (Triton rejects a dot with K < 32, so the same shape of problem comes from a reduction here.)
+@triton.jit
+def row_sum_scaled_64x16(X, Y):
+    m = tl.arange(0, 64)
+    n = tl.arange(0, 16)
+    x = tl.load(X + m[:, None] * 16 + n[None, :]).to(tl.float32)
+    tl.store(Y + m, (tl.sum(x, axis=1) * 2.0).to(tl.bfloat16))
+
+
 # A row max of a 64x64 tile: 2 row tiles, each reducing 2 column tiles.
 @triton.jit
 def row_max_64(X, Y):

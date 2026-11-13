@@ -77,11 +77,21 @@ bool exceedsTile(Operation *op) {
                       [](int64_t n) { return n > ttatlas::target::kTileSize; });
 }
 
-// Fuse only linalg producers. Other tiling-interface producers, such as the
-// tensor.pad that carries a ttatlas.pad tag, must stay whole.
+// Fuse only linalg producers whose loops are whole tiles. Other
+// tiling-interface producers, such as the tensor.pad that carries a ttatlas.pad
+// tag, must stay whole. A producer with a loop that is not a multiple of the
+// tile (a K of 16 under a 64x32 consumer) is left out too: a fused clone is
+// only ever tiled, never padded, so it would stay short of a tile. Left
+// whole, the driver pads it on its own turn and the consumer reads slices of
+// the padded result.
 std::optional<scf::SCFTileAndFuseOptions::ControlFnResult>
 fuseLinalgProducersOnly(tensor::ExtractSliceOp, OpResult producer, bool) {
-  if (!isa<linalg::LinalgOp>(producer.getOwner()))
+  auto linalgOp = dyn_cast<linalg::LinalgOp>(producer.getOwner());
+  if (!linalgOp)
+    return std::nullopt;
+  if (llvm::any_of(linalgOp.getStaticLoopRanges(), [](int64_t size) {
+        return size % ttatlas::target::kTileSize != 0;
+      }))
     return std::nullopt;
   return scf::SCFTileAndFuseOptions::ControlFnResult{};
 }
