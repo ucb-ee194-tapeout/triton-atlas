@@ -163,6 +163,17 @@ def softmax_16(X, Y):
     tl.store(Y + r[:, None] * 16 + r[None, :], (e * (1.0 / tl.sum(e, axis=1))[:, None]).to(tl.bfloat16))
 
 
+# A softmax over 20 of 32 columns: the load is masked (other = -inf), filled with 0 by the host because the subtraction
+# reads it too, so the max reads an add mask and the sum's exp reads one on its input (not a multiply after it).
+@triton.jit
+def softmax_masked_20(X, Y):
+    r = tl.arange(0, 32)
+    m = (r < 20)[None, :]
+    x = tl.load(X + r[:, None] * 32 + r[None, :], mask=m, other=float("-inf")).to(tl.float32)
+    e = tl.exp(x - tl.max(x, axis=1)[:, None])
+    tl.store(Y + r[:, None] * 32 + r[None, :], (e * (1.0 / tl.sum(e, axis=1))[:, None]).to(tl.bfloat16), mask=m)
+
+
 # A row max of a 64x64 tile: 2 row tiles, each reducing 2 column tiles.
 @triton.jit
 def row_max_64(X, Y):

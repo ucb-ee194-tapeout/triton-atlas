@@ -164,15 +164,17 @@ tt.func @bias_row_16(%in: !tt.ptr<bf16>, %out: !tt.ptr<bf16>) {
 // -----
 
 // Padded lanes that an op changed: a 32x40 value through exp, then a row sum over the 40 columns. The host fills only a
-// kernel input, so the sum cannot count on the zeros that padding wrote after exp (exp(0) is 1 on the chip): it reads
-// the padded value times a constant 1/0 mask. Tiling cuts the constant into one tile per column tile.
+// kernel input, so the sum cannot count on the zeros that padding wrote after exp (exp(0) is 1 on the chip). A
+// multiply mask after the exp would meet inf * 0 for a large padded input, so the mask goes before the exp instead:
+// it adds -inf to the padded lanes (exp(-inf) = 0, the sum's identity). Tiling cuts the constant into one tile per
+// column tile.
 #id = affine_map<(d0, d1) -> (d0, d1)>
 // CHECK-LABEL: func.func @exp_then_row_sum_40
-// CHECK-DAG: %[[REAL:.*]] = arith.constant dense<1.000000e+00> : tensor<32x32xf32>
+// CHECK-DAG: %[[REAL:.*]] = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
 // CHECK-DAG: %[[EDGE:.*]] = arith.constant dense<"{{.*}}"> : tensor<32x32xf32>
+// CHECK-DAG: linalg.add {ttatlas.mask_apply} ins(%{{.*}}, %[[REAL]] : tensor<32x32xf32>, tensor<32x32xf32>)
+// CHECK-DAG: linalg.add {ttatlas.mask_apply} ins(%{{.*}}, %[[EDGE]] : tensor<32x32xf32>, tensor<32x32xf32>)
 // CHECK: math.exp
-// CHECK: linalg.mul {ttatlas.mask_apply} ins(%{{.*}}, %[[REAL]] : tensor<32x32xf32>, tensor<32x32xf32>)
-// CHECK: linalg.mul {ttatlas.mask_apply} ins(%{{.*}}, %[[EDGE]] : tensor<32x32xf32>, tensor<32x32xf32>)
 // CHECK-NOT: linalg.mul
 func.func @exp_then_row_sum_40(%x: tensor<32x40xf32>) -> tensor<32xf32> {
   %e = tensor.empty() : tensor<32x40xf32>

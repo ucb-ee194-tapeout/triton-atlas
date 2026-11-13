@@ -15,6 +15,7 @@
 #include "TTAtlas/TTAtlas.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IRMapping.h"
@@ -32,12 +33,10 @@ namespace {
 
 using ttatlas::PadNeutral;
 
-// A one-input, all-parallel linalg.generic whose body only converts its input
-// (arith.extf, arith.truncf, tt.fp_to_fp): what pass 3 makes of a dtype
-// conversion. Returns its input operand, or null.
-Value conversionInput(Operation *op) {
-  if (isa<arith::ExtFOp, arith::TruncFOp, FpToFpOp>(op))
-    return op->getOperand(0);
+// A one-input, all-parallel linalg.generic whose body applies one of `Ops` to
+// its input and yields it (a conversion: arith.extf, arith.truncf,
+// tt.fp_to_fp; or math.exp). Returns its input operand, or null.
+template <typename... Ops> Value unaryBodyInput(Operation *op) {
   auto generic = dyn_cast<linalg::GenericOp>(op);
   if (!generic || generic.getNumDpsInputs() != 1 ||
       generic.getNumDpsInits() != 1 ||
@@ -51,13 +50,55 @@ Value conversionInput(Operation *op) {
   Block &body = generic.getRegion().front();
   if (body.getOperations().size() != 2)
     return {};
-  Operation &convert = body.front();
+  Operation &compute = body.front();
   auto yield = dyn_cast<linalg::YieldOp>(body.back());
-  if (!isa<arith::ExtFOp, arith::TruncFOp, FpToFpOp>(convert) || !yield ||
-      convert.getOperand(0) != body.getArgument(0) ||
-      yield.getOperand(0) != convert.getResult(0))
+  if (!isa<Ops...>(compute) || !yield ||
+      compute.getOperand(0) != body.getArgument(0) ||
+      yield.getOperand(0) != compute.getResult(0))
     return {};
   return generic.getDpsInputOperand(0)->get();
+}
+
+// What pass 3 makes of a dtype conversion.
+Value conversionInput(Operation *op) {
+  if (isa<arith::ExtFOp, arith::TruncFOp, FpToFpOp>(op))
+    return op->getOperand(0);
+  return unaryBodyInput<arith::ExtFOp, arith::TruncFOp, FpToFpOp>(op);
+}
+
+// The input of an elementwise exp.
+Value expInput(Operation *op) { return unaryBodyInput<math::ExpOp>(op); }
+
+// Can an elementwise op on the way to `value` turn a finite lane into an
+// infinity or a NaN (exp, log, a division, ...)? Then a multiply mask after it
+// would meet inf * 0 = NaN, and the VPU has no select to write a lane
+// instead. Looks through elementwise linalg ops, conversions, slices and pads.
+bool mayMakeNonFinite(Value value, unsigned depth = 0) {
+  Operation *definition = value.getDefiningOp();
+  if (!definition)
+    return false;
+  if (depth > 24)
+    return true;
+  if (auto pad = dyn_cast<tensor::PadOp>(definition))
+    return mayMakeNonFinite(pad.getSource(), depth + 1);
+  if (auto slice = dyn_cast<tensor::ExtractSliceOp>(definition))
+    return mayMakeNonFinite(slice.getSource(), depth + 1);
+  auto linalgOp = dyn_cast<linalg::LinalgOp>(definition);
+  if (!linalgOp || llvm::is_contained(linalgOp.getIteratorTypesArray(),
+                                      utils::IteratorType::reduction))
+    return false;
+  bool risky = false;
+  linalgOp->walk([&](Operation *inner) {
+    if (isa<arith::DivFOp, arith::RemFOp>(inner) ||
+        inner->getDialect() == inner->getContext()->getLoadedDialect("math"))
+      risky = true;
+  });
+  if (risky)
+    return true;
+  return llvm::any_of(linalgOp.getDpsInputs(), [&](Value input) {
+    return isa<RankedTensorType>(input.getType()) &&
+           mayMakeNonFinite(input, depth + 1);
+  });
 }
 
 // The value that carries `use`'s lanes on unchanged (a conversion keeps a
@@ -404,10 +445,48 @@ LogicalResult maskPaddedReductions(RewriterBase &rewriter, linalg::LinalgOp op,
       return failure();
     }
 
+    // A sum (identity 0) of exp(y): a multiply mask after the exp meets inf * 0
+    // whenever a padded lane of y is large. Mask y instead, with -inf:
+    // exp(-inf) = 0, the sum's identity, and exact for any finite y. Any other
+    // op that can make a lane non-finite before a multiply mask is rejected.
+    // The operand is the exp's result, or its pad up to whole tiles.
+    Value target = operand->get();
+    PadNeutral applied = *identity;
+    Operation *converter = nullptr;
+    linalg::GenericOp expOp;
+    if (*identity == PadNeutral::zero) {
+      auto pad = target.getDefiningOp<tensor::PadOp>();
+      Value result = pad ? pad.getSource() : target;
+      Operation *definition = result.getDefiningOp();
+      if (Value input = definition ? expInput(definition) : Value()) {
+        if (mayMakeNonFinite(input)) {
+          ttatlas::emitUnsupported(
+              op, "padded lanes reach the reduction through an exp whose "
+                  "input can itself be non-finite (a division, a log, ...); "
+                  "the VPU has no select to write the identity into them");
+          return failure();
+        }
+        expOp = cast<linalg::GenericOp>(definition);
+        target = input;
+        if (pad) {
+          // The same pad, of exp's input.
+          rewriter.setInsertionPoint(op);
+          IRMapping mapping;
+          mapping.map(pad.getSource(), input);
+          target = rewriter.clone(*pad, mapping)->getResult(0);
+        }
+        applied = PadNeutral::neg_inf;
+      } else if (mayMakeNonFinite(target)) {
+        ttatlas::emitUnsupported(
+            op, "padded lanes reach the reduction through an op that can make "
+                "them non-finite (exp, log, a division, ...) and are masked by "
+                "a multiply: inf * 0 is NaN, and the VPU has no select");
+        return failure();
+      }
+    }
+
     // The VPU computes in bf16 and f32. An fp8 value is masked before its
     // conversion, when there is one.
-    Value target = operand->get();
-    Operation *converter = nullptr;
     if (isFp8(target.getType())) {
       converter = target.getDefiningOp();
       Value input = converter ? conversionInput(converter) : Value();
@@ -429,9 +508,24 @@ LogicalResult maskPaddedReductions(RewriterBase &rewriter, linalg::LinalgOp op,
     rewriter.setInsertionPoint(op);
     Value masked;
     created.push_back(applyMask(rewriter, op.getLoc(), target, lanes.valid,
-                                maskedDims, *identity, masked));
+                                maskedDims, applied, masked));
     Value replacement = masked;
-    if (converter) {
+    if (expOp) {
+      auto maskedType = cast<RankedTensorType>(masked.getType());
+      Value empty =
+          tensor::EmptyOp::create(rewriter, op.getLoc(), maskedType.getShape(),
+                                  maskedType.getElementType());
+      auto exp = linalg::GenericOp::create(
+          rewriter, op.getLoc(), TypeRange{maskedType}, ValueRange{masked},
+          ValueRange{empty}, expOp.getIndexingMapsArray(),
+          expOp.getIteratorTypesArray(),
+          [&](OpBuilder &b, Location loc, ValueRange args) {
+            Value value = math::ExpOp::create(b, loc, args[0]);
+            linalg::YieldOp::create(b, loc, value);
+          });
+      created.push_back(exp);
+      replacement = exp.getResult(0);
+    } else if (converter) {
       IRMapping mapping;
       mapping.map(target, masked);
       replacement = rewriter.clone(*converter, mapping)->getResult(0);
