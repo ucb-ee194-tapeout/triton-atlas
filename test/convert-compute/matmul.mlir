@@ -50,3 +50,14 @@ tt.func @bias_accumulator(%x: tensor<32x32xf8E4M3FN>, %w: tensor<32x32xf8E4M3FN>
   %d = tt.dot %x, %w, %bias : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
   tt.return %d : tensor<32x32xf32>
 }
+
+// -----
+
+// A transpose of integer offsets is address math: it stays TTIR and passes the stage-3 check.
+// CHECK-LABEL: tt.func @offset_transpose
+// CHECK: tt.trans
+// CHECK-NOT: linalg.transpose
+tt.func @offset_transpose(%o: tensor<32x32xi32>) -> tensor<32x32xi32> {
+  %t = tt.trans %o {order = array<i32: 1, 0>} : tensor<32x32xi32> -> tensor<32x32xi32>
+  tt.return %t : tensor<32x32xi32>
+}

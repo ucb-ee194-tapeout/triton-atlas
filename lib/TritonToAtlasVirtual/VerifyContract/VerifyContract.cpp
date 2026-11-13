@@ -221,7 +221,9 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
     module.walk([&](Operation *op) {
       if (inLinalgBody(op))
         return;
-      if (isa<DotOp, TransOp, ReduceOp>(op)) {
+      // A transpose of integer offsets is address math, which stays TTIR.
+      if (isa<DotOp, ReduceOp>(op) ||
+          (isa<TransOp>(op) && isFloatTensor(op->getResult(0).getType()))) {
         broken(op,
                Twine("TTIR compute is left: ") + op->getName().getStringRef());
         return;
