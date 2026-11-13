@@ -13,6 +13,7 @@ the same small hardware unit.
 | `attention_then_mlp` | Attention followed by two MLP layers |
 | `stacked_attention` | Two attention layers in sequence |
 | `stacked_attention_then_mlp` | Two attention layers followed by two MLP layers |
+| `attention_then_ten_layer_mlp` | One attention layer followed by ten MLP layers |
 
 Run all cases with:
 

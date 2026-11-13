@@ -92,3 +92,51 @@ def stacked_attention_then_mlp(Q, K0, V0, K1, V1, W0, W1, Out):
     output = tl.dot(hidden.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w1,
                     input_precision='ieee').to(tl.bfloat16)
     tl.store(Out + r * 32 + c, output)
+
+
+@triton.jit
+def attention_then_ten_layer_mlp(Q, K, V, W0, W1, W2, W3, W4, W5, W6, W7, W8, W9, Out):
+    """One attention block followed by ten sequential MLP layers."""
+    r = tl.arange(0, 32)[:, None]
+    c = tl.arange(0, 32)[None, :]
+    q = tl.load(Q + r * 32 + c)
+    k = tl.load(K + r * 32 + c)
+    v = tl.load(V + r * 32 + c)
+    w0 = tl.load(W0 + r * 32 + c)
+    w1 = tl.load(W1 + r * 32 + c)
+    w2 = tl.load(W2 + r * 32 + c)
+    w3 = tl.load(W3 + r * 32 + c)
+    w4 = tl.load(W4 + r * 32 + c)
+    w5 = tl.load(W5 + r * 32 + c)
+    w6 = tl.load(W6 + r * 32 + c)
+    w7 = tl.load(W7 + r * 32 + c)
+    w8 = tl.load(W8 + r * 32 + c)
+    w9 = tl.load(W9 + r * 32 + c)
+    scores = tl.dot(q, tl.trans(k), input_precision='ieee').to(tl.bfloat16)
+    row_max = tl.max(scores.to(tl.float32), 1).to(tl.bfloat16)
+    exponent = tl.exp((scores - row_max[:, None]).to(tl.float32)).to(tl.bfloat16)
+    row_sum = tl.sum(exponent.to(tl.float32), 1).to(tl.bfloat16)
+    probability = (exponent * (1.0 / row_sum)[:, None]).to(tl.bfloat16)
+    h = tl.dot(probability.to(tl.float8e4nv, fp_downcast_rounding='rtne'), v,
+               input_precision='ieee').to(tl.bfloat16)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w0,
+                          input_precision='ieee'), 0.0)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w1,
+                          input_precision='ieee'), 0.0)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w2,
+                          input_precision='ieee'), 0.0)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w3,
+                          input_precision='ieee'), 0.0)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w4,
+                          input_precision='ieee'), 0.0)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w5,
+                          input_precision='ieee'), 0.0)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w6,
+                          input_precision='ieee'), 0.0)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w7,
+                          input_precision='ieee'), 0.0)
+    h = tl.maximum(tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w8,
+                          input_precision='ieee'), 0.0)
+    output = tl.dot(h.to(tl.float8e4nv, fp_downcast_rounding='rtne'), w9,
+                    input_precision='ieee').to(tl.bfloat16)
+    tl.store(Out + r * 32 + c, output)

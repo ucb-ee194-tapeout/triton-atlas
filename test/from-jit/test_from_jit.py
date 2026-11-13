@@ -98,6 +98,11 @@ ROWS = [
     row("stacked_attention_then_mlp", model_attention.stacked_attention_then_mlp,
         {"Q": FP8, "K0": FP8, "V0": FP8, "K1": FP8, "V1": FP8,
          "W0": FP8, "W1": FP8, "Out": BF16}, end_to_end=True),
+    row("attention_then_ten_layer_mlp", model_attention.attention_then_ten_layer_mlp,
+        {"Q": FP8, "K": FP8, "V": FP8, "W0": FP8, "W1": FP8,
+         "W2": FP8, "W3": FP8, "W4": FP8, "W5": FP8, "W6": FP8,
+         "W7": FP8, "W8": FP8, "W9": FP8, "Out": BF16},
+        end_to_end=True),
     # Expected end-to-end failure: pass 7 splices one K chain at a time, and four output tiles each have a chain
     # (planned pass 7 fix).
     row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16},
