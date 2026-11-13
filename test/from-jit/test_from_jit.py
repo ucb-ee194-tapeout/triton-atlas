@@ -73,9 +73,9 @@ ROWS = [
         constexprs={"K": 128}),
     row("dot_plus_dot", kernels.dot_plus_dot, {"A": FP8, "Bm": FP8, "C": BF16}),
     row("row_reduce", kernels.row_reduce, {"X": BF16, "Y": BF16}),
-    # Pass 1 rejects packing BF16 back to FP8 in the kernel: no FP8 scale-code rule yet.
-    row("fp8_two_layer", kernels.fp8_two_layer, {"X": FP8, "W0": FP8, "W1": FP8, "Out": BF16}, passes_ok=0,
-        first_error=r"unsupported tt\.fp_to_fp: converts bf16 to f8E4M3FN"),
+    # The hidden BF16 tile is packed at unit scale before the second dot.
+    row("fp8_two_layer", kernels.fp8_two_layer,
+        {"X": FP8, "W0": FP8, "W1": FP8, "Out": BF16}, end_to_end=True),
     # Pass 1 rejects the BF16 transpose of K (Atlas transposes FP8 only), before it reaches the BF16 dots.
     row("bf16_simple_attention", kernels.bf16_simple_attention, {"Q": BF16, "K": BF16, "V": BF16, "Out": BF16},
         passes_ok=0, first_error=r"unsupported tt\.trans: transposes bf16"),

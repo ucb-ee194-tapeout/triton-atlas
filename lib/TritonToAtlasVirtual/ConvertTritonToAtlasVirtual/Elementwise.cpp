@@ -242,12 +242,32 @@ struct ConvertGeneric : ConversionPattern {
     if (isa<arith::TruncFOp, arith::ExtFOp>(compute)) {
       auto input = dyn_cast<BlockArgument>(compute->getOperand(0));
       if (inputCount != 1 || !input || input.getArgNumber() != 0 ||
-          !isa<atlas::VirtualBF16Type>(operands.front().getType()) ||
-          !isa<atlas::VirtualBF16Type>(
-              getTypeConverter()->convertType(op->getResult(0).getType())))
+          !isa<atlas::VirtualBF16Type>(operands.front().getType()))
         return failure();
       Operation *empty = genericDestinationToErase(
           op, op->getOperand(op->getNumOperands() - 1));
+      Type convertedResult =
+          getTypeConverter()->convertType(op->getResult(0).getType());
+      // A BF16 -> FP8 conversion is the boundary between consecutive MLP
+      // layers.  Atlas supplies pack_fp8 specifically for this transition;
+      // the conversion's scale tag was attached by pass 3.
+      if (isa<atlas::VirtualFP8Type>(convertedResult)) {
+        auto scale = compute->getAttrOfType<IntegerAttr>(ttatlas::kScale);
+        if (!scale)
+          return ttatlas::emitUnsupported(
+              op, "BF16 to FP8 conversion is missing ttatlas.scale");
+        Operation *pack = createAtlasOp(
+            rewriter, op->getLoc(), atlas::VirtualPackFP8Op::getOperationName(),
+            ValueRange{operands.front()}, convertedResult,
+            rewriter.getNamedAttr("scale_code",
+                                 rewriter.getI32IntegerAttr(scale.getInt())));
+        rewriter.replaceOp(op, pack->getResults());
+        if (empty)
+          rewriter.eraseOp(empty);
+        return success();
+      }
+      if (!isa<atlas::VirtualBF16Type>(convertedResult))
+        return failure();
       rewriter.replaceOp(op, operands.front());
       if (empty)
         rewriter.eraseOp(empty);

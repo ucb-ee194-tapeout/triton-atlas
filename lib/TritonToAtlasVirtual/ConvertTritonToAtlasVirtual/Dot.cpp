@@ -45,6 +45,23 @@ static std::optional<Role> getWeightRole(Value value) {
   return std::nullopt;
 }
 
+// A direct Atlas input gets its activation role from its slot.  The second
+// and later layers of an MLP instead consume the FP8 result of the preceding
+// BF16-to-FP8 pack, which has no DRAM slot because it stays on Atlas.
+static bool isPackedActivation(Value value) {
+  auto generic = value.getDefiningOp<linalg::GenericOp>();
+  if (!generic || generic.getNumDpsInputs() != 1 ||
+      !isa<Float8E4M3FNType>(
+          cast<RankedTensorType>(generic->getResult(0).getType())
+              .getElementType()))
+    return false;
+  for (Operation &nested : generic.getBody()->without_terminator())
+    if (auto trunc = dyn_cast<arith::TruncFOp>(nested);
+        trunc->hasAttr(ttatlas::kScale))
+      return true;
+  return false;
+}
+
 static FailureOr<int32_t> getMxuUnit(Operation *matmul) {
   auto unit = matmul->getAttrOfType<IntegerAttr>(ttatlas::kMxu);
   if (!unit || !unit.getType().isSignlessInteger(32) || unit.getInt() < 0 ||
@@ -110,9 +127,12 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
       return ttatlas::emitUnsupported(
           matmul, "weight_fp8_kn must not have a linalg.transpose producer");
   auto activationRole = getWeightRole(matmul->getOperand(0));
-  if (!activationRole || *activationRole != Role::activation_fp8)
+  if ((!activationRole || *activationRole != Role::activation_fp8) &&
+      !isPackedActivation(matmul->getOperand(0)))
     return ttatlas::emitUnsupported(
-        matmul, "matmul left operand requires an activation_fp8 slot");
+        matmul,
+        "matmul left operand requires an activation_fp8 slot or a packed "
+        "result from the preceding MLP layer");
 
   Operation *fill = matmul->getOperand(2).getDefiningOp();
   // ConvertMatmul already checked the structural zero-fill seed before it

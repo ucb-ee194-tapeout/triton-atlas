@@ -97,18 +97,22 @@ LogicalResult checkStore(StoreOp store, EmitFn emit) {
   return success();
 }
 
-// BF16 to f32 or back. FP8 is out until a rule picks the scale code (FP8
-// E4M3 saturates above 448). Narrowing must round to nearest even: that is
-// what arith.truncf (pass 3) and Atlas do, so another tt.fp_to_fp rounding
-// would change results silently.
+// BF16 to f32 or back, plus BF16 to FP8 E4M3 for the output of one MLP layer
+// feeding the next.  The first MLP policy uses Atlas's unit scale (127): this
+// makes the choice explicit in pass 3, where the conversion becomes a pack.
+// Narrowing must round to nearest even: that is what arith.truncf (pass 3)
+// and Atlas do, so another tt.fp_to_fp rounding would change results
+// silently.
 LogicalResult checkConversion(Operation *op, EmitFn emit) {
   Type from = getElementTypeOrSelf(op->getOperand(0).getType());
   Type to = getElementTypeOrSelf(op->getResult(0).getType());
-  if (!(from.isBF16() && to.isF32()) && !(from.isF32() && to.isBF16()))
+  bool bf16ToFp8 = from.isBF16() && isa<Float8E4M3FNType>(to);
+  if (!(from.isBF16() && to.isF32()) && !(from.isF32() && to.isBF16()) &&
+      !bf16ToFp8)
     return fail(emit, "converts " + printed(from) + " to " + printed(to) +
-                          "; only BF16 <-> f32 is accepted (no FP8 "
-                          "scale-code rule yet)");
-  bool narrowing = from.isF32() && to.isBF16();
+                          "; only BF16 <-> f32 or BF16 -> FP8 E4M3 is "
+                          "accepted");
+  bool narrowing = (from.isF32() && to.isBF16()) || bf16ToFp8;
   if (auto fpToFp = dyn_cast<FpToFpOp>(op); fpToFp && narrowing)
     if (std::optional<RoundingMode> rounding = fpToFp.getRounding();
         rounding && *rounding != RoundingMode::RTNE)
