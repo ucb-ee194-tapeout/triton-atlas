@@ -4,25 +4,68 @@
 #include "Atlas/AtlasOps.h"
 #include "Atlas/AtlasTypes.h"
 #include "TTAtlas/TTAtlas.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/APFloat.h"
+
+#include <optional>
+#include <string>
 
 namespace mlir::triton {
 namespace {
 
-static StringRef reductionKind(Operation *op) {
-  if (op->getNumRegions() != 1 || op->getRegion(0).empty())
-    return {};
-  for (Operation &nested : op->getRegion(0).front()) {
-    StringRef name = nested.getName().getStringRef();
-    if (name == "arith.addf" || name == "arith.addi")
-      return "row_sum";
-    if (name == "arith.maxnumf" || name == "arith.maximumf" ||
-        name == "arith.maxsi" || name == "arith.maxui")
-      return "row_max";
+// The row operation of a reduction whose body is one floating-point combiner,
+// and the value that combiner starts from (its identity). Integer combiners
+// have no VPU row operation: the VPU reduces BF16 and f32 only.
+struct RowReduction {
+  StringRef kind;
+  llvm::APFloat identity;
+};
+
+static std::optional<RowReduction> rowReduction(Operation *op,
+                                                std::string &why) {
+  if (op->getNumRegions() != 1 || op->getRegion(0).empty() ||
+      op->getRegion(0).front().getOperations().size() != 2) {
+    why = "the reduction body must be one combiner and a yield";
+    return std::nullopt;
   }
-  return {};
+  Operation &combiner = op->getRegion(0).front().front();
+  auto element = dyn_cast<FloatType>(combiner.getResult(0).getType());
+  if (!element) {
+    why = "an integer reduction has no VPU row operation (BF16 and f32 only)";
+    return std::nullopt;
+  }
+  const llvm::fltSemantics &semantics = element.getFloatSemantics();
+  if (isa<arith::AddFOp>(combiner))
+    return RowReduction{"row_sum", llvm::APFloat::getZero(semantics)};
+  if (isa<arith::MaxNumFOp, arith::MaximumFOp>(combiner))
+    return RowReduction{"row_max",
+                        llvm::APFloat::getInf(semantics, /*Negative=*/true)};
+  if (isa<arith::MinNumFOp, arith::MinimumFOp>(combiner))
+    return RowReduction{"row_min",
+                        llvm::APFloat::getInf(semantics, /*Negative=*/false)};
+  why = "the combiner is not an add, a maximum or a minimum";
+  return std::nullopt;
+}
+
+// Is `init` a linalg.fill of exactly `identity`? virtual_vpu_reduce computes
+// the reduction of the row alone, so a start value that is not the identity
+// would be dropped.
+static bool isIdentityFill(Value init, const llvm::APFloat &identity) {
+  auto fill = init.getDefiningOp<linalg::FillOp>();
+  if (!fill)
+    return false;
+  FloatAttr attribute;
+  if (!matchPattern(fill.getInputs().front(), m_Constant(&attribute)))
+    return false;
+  const llvm::APFloat &value = attribute.getValue();
+  return identity.isZero() ? value.isZero()
+                           : (value.isInfinity() &&
+                              value.isNegative() == identity.isNegative());
 }
 
 struct ConvertRowReduce : ConversionPattern {
@@ -30,8 +73,9 @@ struct ConvertRowReduce : ConversionPattern {
       : ConversionPattern(converter, "linalg.reduce", PatternBenefit(1),
                           context) {}
 
-  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const override {
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
     if (op->getNumOperands() != 2 || operands.empty() ||
         op->getNumResults() != 1)
       return ttatlas::emitUnsupported(
@@ -50,15 +94,20 @@ struct ConvertRowReduce : ConversionPattern {
       return ttatlas::emitUnsupported(
           op, "only a 32x32 axis-1 row reduction to tensor<32xT> is supported");
 
-    StringRef kind = reductionKind(op);
-    if (kind.empty())
+    std::string why;
+    std::optional<RowReduction> reduction = rowReduction(op, why);
+    if (!reduction)
+      return ttatlas::emitUnsupported(op, why);
+    if (!isIdentityFill(op->getOperand(1), reduction->identity))
       return ttatlas::emitUnsupported(
-          op, "row reduction requires an add or maximum body");
+          op, "the reduction must start from a linalg.fill of its combiner's "
+              "identity (0 for a sum, -inf for a max, +inf for a min): the "
+              "virtual row reduction takes no start value");
     OperationState state(op->getLoc(),
                          atlas::VirtualVPUReduceOp::getOperationName());
     state.addOperands(operands.front());
     state.addTypes(atlas::VirtualBF16Type::get(op->getContext()));
-    state.addAttribute("kind", rewriter.getStringAttr(kind));
+    state.addAttribute("kind", rewriter.getStringAttr(reduction->kind));
     rewriter.replaceOp(op, rewriter.create(state)->getResults());
     return success();
   }

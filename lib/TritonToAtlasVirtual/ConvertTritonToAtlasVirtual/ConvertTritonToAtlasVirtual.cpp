@@ -75,14 +75,16 @@ struct ConvertTritonToAtlasVirtual
         return user->getName().getDialectNamespace() == "linalg";
       });
     });
-    // A fill is legal while only matmul accumulators read it (several chains
-    // can share one after CSE); it is swept when nothing reads it any more.
+    // A fill is legal while only matmul accumulators and reduction inits read
+    // it (several chains can share one after CSE); it is swept when nothing
+    // reads it any more.
     target.addDynamicallyLegalOp<linalg::FillOp>([](linalg::FillOp fill) {
       return fill->getNumResults() == 1 &&
              llvm::all_of(fill->getResult(0).getUses(), [](OpOperand &use) {
-               return use.getOwner()->getName().getStringRef() ==
-                          "linalg.matmul" &&
-                      use.getOperandNumber() == 2;
+               StringRef user = use.getOwner()->getName().getStringRef();
+               return (user == "linalg.matmul" &&
+                       use.getOperandNumber() == 2) ||
+                      (user == "linalg.reduce" && use.getOperandNumber() == 1);
              });
     });
     // The region bodies are erased together with the enclosing linalg op.

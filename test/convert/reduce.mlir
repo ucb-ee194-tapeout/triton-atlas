@@ -8,8 +8,10 @@ module {
     %xp = tt.splat %x : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>
     %op = tt.splat %out : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>
     %input = tt.load %xp {ttatlas.slot = #ttatlas.slot<index = 0, arg = 0, role = bias_bf16, tile_origin = affine_map<()[s0, s1, s2, s3, s4, s5] -> (0, 0)>, logical_shape = [32, 32], host_dtype = bf16>} : tensor<32x32x!tt.ptr<bf16>>
+    %zero = arith.constant 0.000000e+00 : bf16
     %row_empty = tensor.empty() : tensor<32xbf16>
-    %row = linalg.reduce ins(%input : tensor<32x32xbf16>) outs(%row_empty : tensor<32xbf16>) dimensions = [1]
+    %row_init = linalg.fill ins(%zero : bf16) outs(%row_empty : tensor<32xbf16>) -> tensor<32xbf16>
+    %row = linalg.reduce ins(%input : tensor<32x32xbf16>) outs(%row_init : tensor<32xbf16>) dimensions = [1]
     (%lhs: bf16, %rhs: bf16) {
       %sum = arith.addf %lhs, %rhs : bf16
       linalg.yield %sum : bf16
