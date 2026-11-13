@@ -27,7 +27,12 @@ inline constexpr llvm::StringLiteral kHostDtype =
 inline constexpr llvm::StringLiteral kKChain =
     "ttatlas.k_chain"; // #ttatlas.k_chain, on tt.dot (pass 2, read by pass 3)
 inline constexpr llvm::StringLiteral kPad =
-    "ttatlas.pad"; // #ttatlas.pad, on the defining op, not a constant (pass 4)
+    "ttatlas.pad"; // #ttatlas.pad, one per padded boundary tile, on its op, not
+                   // a constant (pass 4)
+inline constexpr llvm::StringLiteral kMaskApply =
+    "ttatlas.mask_apply"; // unit, on the linalg.mul / linalg.add that pass 4
+                          // puts before a reduction: its constant operand is
+                          // a constant mask tile (pass 4, read by 6 and 7)
 inline constexpr llvm::StringLiteral kMxu =
     "ttatlas.mxu"; // i32 < target::kMxuUnits, on linalg.matmul (pass 4)
 inline constexpr llvm::StringLiteral kScale =

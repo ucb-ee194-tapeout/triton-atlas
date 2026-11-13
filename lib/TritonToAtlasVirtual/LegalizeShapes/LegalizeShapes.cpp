@@ -1,8 +1,29 @@
-// Pass 4, ttatlas-legalize-shapes. Contract: triton-atlas design agenda, page
-// "Pass 4 · ttatlas-legalize-shapes". Placeholder for now: runOnOperation()
-// does nothing. Shape follows triton v3.9.0
-// third_party/amd/lib/TritonAMDGPUToLLVM.
+// Pass 4: tile linalg at the Atlas tile size (MLIR's SCF tile-and-fuse driver),
+// fully unroll the static tile loops, and attach the MXU policy tag.
+#include "LegalizeShapes.h"
+
 #include "TritonToAtlasVirtual/Passes.h"
+
+#include "TTAtlas/AtlasTarget.h"
+#include "TTAtlas/TTAtlas.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
+#include "mlir/Dialect/SCF/Utils/Utils.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/Tensor/Transforms/Transforms.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/Interfaces/TilingInterface.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
+
+#include <algorithm>
+#include <optional>
 
 namespace mlir::triton {
 
@@ -11,8 +32,302 @@ namespace mlir::triton {
 
 namespace {
 
+static bool isSupportedStaticDomain(linalg::LinalgOp op) {
+  if (op.hasDynamicShape())
+    return false;
+  for (int64_t size : op.getStaticLoopRanges())
+    if (size <= 0)
+      return false;
+  return true;
+}
+
+static bool isSupportedTensor(Type type) {
+  auto tensor = dyn_cast<RankedTensorType>(type);
+  if (!tensor || (tensor.getRank() != 1 && tensor.getRank() != 2))
+    return false;
+  return llvm::all_of(tensor.getShape(), [](int64_t size) {
+    return !ShapedType::isDynamic(size) && size > 0;
+  });
+}
+
+// Forget ops the rewriter erased, so a worklist never touches a dead pointer.
+struct LiveOps : RewriterBase::Listener {
+  DenseSet<Operation *> live;
+  void notifyOperationErased(Operation *op) override { live.erase(op); }
+};
+
+// Does a loop of `op` fall short of whole tiles?
+static bool needsPadding(linalg::LinalgOp op) {
+  return llvm::any_of(op.getStaticLoopRanges(), [](int64_t size) {
+    return size % ttatlas::target::kTileSize != 0;
+  });
+}
+
 struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
-  void runOnOperation() override {}
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    MaskBoxes maskBoxes;
+    if (failed(readMaskedBoundaries(module, maskBoxes))) {
+      signalPassFailure();
+      return;
+    }
+    bool hadFailure = false;
+    SmallVector<Operation *> computeOps;
+    module.walk([&](Operation *op) {
+      // The ops in a linalg body are arith/math, and linalg.yield is no
+      // LinalgOp, so this collects exactly the compute ops.
+      if (isa<linalg::LinalgOp>(op))
+        computeOps.push_back(op);
+    });
+
+    // Validate the whole input before rewriting so an unsupported later op
+    // cannot leave a partly legalized module behind.
+    for (Operation *op : computeOps) {
+      auto linalgOp = cast<linalg::LinalgOp>(op);
+      if (!isSupportedStaticDomain(linalgOp)) {
+        ttatlas::emitUnsupported(
+            op, "iteration dimensions must be positive and static");
+        hadFailure = true;
+        continue;
+      }
+      bool validTensorShapes = true;
+      for (Type type : llvm::concat<const Type>(op->getOperandTypes(),
+                                                op->getResultTypes())) {
+        if (isa<TensorType>(type) && !isSupportedTensor(type)) {
+          ttatlas::emitUnsupported(op, "linalg tensor must have static rank 1 "
+                                       "or 2 and positive dimensions");
+          hadFailure = true;
+          validTensorShapes = false;
+          break;
+        }
+      }
+      if (!validTensorShapes)
+        continue;
+      if (isa<linalg::MatmulOp>(op) && hasConflictingMxu(op))
+        hadFailure = true;
+    }
+    if (hadFailure) {
+      signalPassFailure();
+      return;
+    }
+
+    if (failed(tileBareCopies(module))) {
+      signalPassFailure();
+      return;
+    }
+
+    LoadFills loadFills;
+    readLoadFills(module, maskBoxes, loadFills);
+
+    LiveOps tracker;
+    IRRewriter rewriter(module.getContext(), &tracker);
+    for (Operation *op : computeOps)
+      tracker.live.insert(op);
+
+    // Split every linalg op larger than a tile, then re-queue the tiles: the
+    // worklist ends when each op is one tile. A tile can still be too large in
+    // a dimension that tiling left whole (a reduction, or an op fused into a
+    // tiled consumer), so this repeats per op until it is not.
+    SmallVector<Operation *> worklist;
+    auto drain = [&]() -> LogicalResult {
+      while (!worklist.empty()) {
+        Operation *op = worklist.pop_back_val();
+        if (!tracker.live.contains(op) || !exceedsTile(op))
+          continue;
+        auto linalgOp = cast<linalg::LinalgOp>(op);
+        scf::SCFTilingOptions options;
+        options.setTileSizes(
+            atlasTileSizes(rewriter, linalgOp, /*parallelOnly=*/false));
+        rewriter.setInsertionPoint(op);
+        FailureOr<scf::SCFTilingResult> tiled =
+            scf::tileUsingSCF(rewriter, cast<TilingInterface>(op), options);
+        if (failed(tiled)) {
+          ttatlas::emitUnsupported(op,
+                                   "MLIR failed to tile the linalg operation");
+          return failure();
+        }
+        ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
+                                    "tile linalg compute to 32x32");
+        rewriter.replaceOp(op, tiled->replacements);
+        for (Operation *tile : tiled->tiledOps) {
+          tracker.live.insert(tile);
+          worklist.push_back(tile);
+        }
+      }
+      return success();
+    };
+
+    // Pad and mask every reduction before anything is tiled or fused. A mask
+    // apply is then an ordinary producer of its reduction, so tiling slices it
+    // and fusion carries it into every clone of the reduction. Done after
+    // fusion, the mask would sit on the original reduction, which dies once a
+    // consumer's tiles have cloned it. Consumers first, as below, so a lane
+    // analysis sees the producers as the kernel wrote them.
+    DenseSet<Operation *> prepared;
+    for (Operation *op : llvm::reverse(computeOps)) {
+      if (!tracker.live.contains(op))
+        continue;
+      auto linalgOp = cast<linalg::LinalgOp>(op);
+      if (!llvm::is_contained(linalgOp.getIteratorTypesArray(),
+                              utils::IteratorType::reduction) ||
+          llvm::all_of(op->getResults(),
+                       [](Value result) { return result.use_empty(); }))
+        continue;
+      if (needsPadding(linalgOp)) {
+        linalg::LinalgOp paddedOp;
+        SmallVector<Value> replacements;
+        rewriter.setInsertionPoint(op);
+        if (failed(padToAtlasTiles(rewriter, linalgOp, loadFills, paddedOp,
+                                   replacements))) {
+          signalPassFailure();
+          return;
+        }
+        rewriter.replaceOp(op, replacements);
+        op = paddedOp.getOperation();
+        tracker.live.insert(op);
+        linalgOp = paddedOp;
+      }
+      SmallVector<Operation *> masks;
+      if (failed(maskPaddedReductions(rewriter, linalgOp, maskBoxes, masks))) {
+        signalPassFailure();
+        return;
+      }
+      for (Operation *mask : masks)
+        tracker.live.insert(mask);
+      prepared.insert(op);
+    }
+    computeOps.clear();
+    module.walk([&](linalg::LinalgOp op) {
+      computeOps.push_back(op);
+      tracker.live.insert(op);
+    });
+
+    // Consumers first, so each producer is fused into its consumer's tiles
+    // before it is looked at on its own.
+    SmallVector<Operation *> pending(computeOps);
+    while (!pending.empty()) {
+      Operation *op = pending.pop_back_val();
+      if (!tracker.live.contains(op))
+        continue;
+      if (llvm::all_of(op->getResults(),
+                       [](Value result) { return result.use_empty(); })) {
+        rewriter.eraseOp(op);
+        continue;
+      }
+      auto linalgOp = cast<linalg::LinalgOp>(op);
+      if (isa<linalg::MatmulOp>(op) && !setMxuZero(op)) {
+        signalPassFailure();
+        return;
+      }
+      if (!prepared.contains(op) && needsPadding(linalgOp)) {
+        linalg::LinalgOp paddedOp;
+        SmallVector<Value> replacements;
+        rewriter.setInsertionPoint(op);
+        if (failed(padToAtlasTiles(rewriter, linalgOp, loadFills, paddedOp,
+                                   replacements))) {
+          signalPassFailure();
+          return;
+        }
+        rewriter.replaceOp(op, replacements);
+        op = paddedOp.getOperation();
+        tracker.live.insert(op);
+        linalgOp = paddedOp;
+      }
+      if (!exceedsTile(op))
+        continue;
+
+      SmallVector<OpFoldResult> sizes =
+          atlasTileSizes(rewriter, linalgOp, /*parallelOnly=*/true);
+      if (llvm::all_of(sizes,
+                       [](OpFoldResult size) { return isZeroInteger(size); })) {
+        // Only reductions are too large: nothing to fuse into, split them
+        // below.
+        worklist.push_back(op);
+      } else {
+        scf::SCFTileAndFuseOptions options;
+        scf::SCFTilingOptions tiling;
+        tiling.setTileSizes(sizes);
+        options.setTilingOptions(tiling);
+        options.setFusionControlFn(fuseLinalgProducersOnly);
+        rewriter.setInsertionPoint(op);
+        FailureOr<scf::SCFTileAndFuseResult> tiled =
+            scf::tileConsumerAndFuseProducersUsingSCF(
+                rewriter, cast<TilingInterface>(op), options);
+        if (failed(tiled)) {
+          ttatlas::emitUnsupported(op,
+                                   "MLIR failed to tile the linalg operation");
+          signalPassFailure();
+          return;
+        }
+        ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
+                                    "tile linalg compute to 32x32");
+        for (auto [original, replacement] : tiled->replacements)
+          rewriter.replaceAllUsesWith(original, replacement);
+        // The consumer's results were replaced; drop it if nothing else needs
+        // it.
+        if (llvm::all_of(op->getResults(),
+                         [](Value r) { return r.use_empty(); }))
+          rewriter.eraseOp(op);
+        for (Operation *tile : tiled->tiledAndFusedOps) {
+          tracker.live.insert(tile);
+          worklist.push_back(tile);
+        }
+      }
+      if (failed(drain())) {
+        signalPassFailure();
+        return;
+      }
+    }
+
+    if (failed(unrollTileLoops(module))) {
+      signalPassFailure();
+      return;
+    }
+    freshFillDestinations(module, rewriter);
+
+    // Tiling the consumer first and then the producer again slices a loaded
+    // tensor twice (64x64 -> 32x64 -> 32x32). Merge each chain into one
+    // constant slice of the load, which the stage-4 contract asks for, with
+    // MLIR's own patterns; no folding, so nothing else changes here.
+    RewritePatternSet mergeSlices(module.getContext());
+    tensor::populateMergeConsecutiveInsertExtractSlicePatterns(mergeSlices);
+    if (failed(applyPatternsGreedily(
+            module, std::move(mergeSlices),
+            GreedyRewriteConfig().enableFolding(false).enableConstantCSE(
+                false)))) {
+      module.emitError("atlas: merging tile slices did not converge");
+      signalPassFailure();
+      return;
+    }
+
+    // Each tile slice of a mask constant becomes a tile-sized constant
+    // (canonicalization alone leaves a slice of a non-splat constant). Folding
+    // is on here, and the slice's own canonicalization, so the offsets, still
+    // index arithmetic after unrolling, are static numbers the pattern can
+    // read.
+    RewritePatternSet foldMasks(module.getContext());
+    tensor::ExtractSliceOp::getCanonicalizationPatterns(foldMasks,
+                                                        module.getContext());
+    tensor::populateFoldConstantExtractSlicePatterns(
+        foldMasks, [](tensor::ExtractSliceOp) { return true; });
+    if (failed(applyPatternsGreedily(module, std::move(foldMasks)))) {
+      module.emitError("atlas: folding mask tiles did not converge");
+      signalPassFailure();
+      return;
+    }
+
+    if (failed(tagBoundaryTiles(module, maskBoxes))) {
+      signalPassFailure();
+      return;
+    }
+
+    module.walk([&](Operation *op) {
+      if (isa<linalg::MatmulOp>(op))
+        hadFailure |= !setMxuZero(op);
+    });
+    if (hadFailure)
+      signalPassFailure();
+  }
 };
 
 } // namespace

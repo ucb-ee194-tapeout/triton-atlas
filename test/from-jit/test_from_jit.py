@@ -36,6 +36,10 @@ STAGES = {
     1: ["--ttatlas-validate-ttir"],
     2: ["--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP],
     3: ["--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg"],
+    4: [
+        "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
+        "--ttatlas-legalize-shapes", *CLEANUP
+    ],
 }
 LAST = max(STAGES)
 
@@ -66,6 +70,17 @@ ROWS = [
     # Pass 1 rejects the BF16 transpose of K (Atlas transposes FP8 only), before it reaches the BF16 dots.
     row("bf16_simple_attention", kernels.bf16_simple_attention, {"Q": BF16, "K": BF16, "V": BF16, "Out": BF16},
         passes_ok=0, first_error=r"unsupported tt\.trans: transposes bf16"),
+    row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16}),
+    row("matmul_relu_64x32", kernels.matmul_relu_64x32, {"A": FP8, "Bm": FP8, "C": BF16}),
+    row("row_sum_scaled_64x16", kernels.row_sum_scaled_64x16, {"X": BF16, "Y": BF16}),
+    row("softmax_16", kernels.softmax_16, {"X": BF16, "Y": BF16}),
+    row("softmax_masked_20", kernels.softmax_masked_20, {"X": BF16, "Y": BF16}),
+    row("row_max_64", kernels.row_max_64, {"X": BF16, "Y": BF16}),
+    row("add_16", kernels.add_16, {"X": BF16, "Y": BF16}),
+    row("add_rows_50", kernels.add_rows_50, {"X": BF16, "Y": BF16}),
+    row("add_64x16", kernels.add_64x16, {"X": BF16, "Y": BF16}),
+    row("copy_16", kernels.copy_16, {"X": BF16, "Y": BF16}),
+    row("copy_rows_50", kernels.copy_rows_50, {"X": BF16, "Y": BF16}),
 ]
 
 
@@ -88,6 +103,8 @@ def run_stage(opt, path, k):
                        capture_output=True, text=True)
     if p.returncode == 0:
         return None
+    if p.returncode < 0:  # killed by a signal: a crash, whose first line is LLVM's bug-report banner
+        return f"crashed (signal {-p.returncode})"
     return next((line for line in p.stderr.splitlines() if "error:" in line), p.stderr.strip() or "(no output)")
 
 
