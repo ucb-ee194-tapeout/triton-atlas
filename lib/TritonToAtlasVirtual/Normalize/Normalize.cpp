@@ -4,6 +4,8 @@
 // the previous dot of its chain, and tags each chain's dots ttatlas.k_chain.
 #include "TritonToAtlasVirtual/Passes.h"
 
+#include "TTAtlas/AtlasTarget.h"
+
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/IR/Matchers.h"
@@ -35,6 +37,33 @@ LogicalResult unrollLoops(ModuleOp module) {
           "ttatlas-normalize: can't unroll this loop: its trip count isn't a "
           "constant (ttatlas-validate-ttir rejects such loops)");
   return success();
+}
+
+// Program words one K step adds once unrolled: 23.5, measured by lowering
+// with atlas-mlir 9e204d4 and running on npu_model 74982e7, for one 32x32
+// output tile (mxu_accumulate per step, plus its loads); rounded down so the
+// estimate stays a lower bound.
+constexpr int64_t kWordsPerKStep = 23;
+
+// Warns, without failing, when the unrolled kernel likely exceeds Atlas's
+// program size: its dots alone, at kWordsPerKStep words each, already need
+// more than kProgramWords (2048 at our pin). Only a warning, because this is
+// an estimate before tiling (pass 4 multiplies the dots further) and the real
+// size is checked at the end (pass 8); it tells the author early which loop
+// made the program large.
+void warnIfProgramTooLarge(ModuleOp module) {
+  module.walk([](FuncOp func) {
+    int64_t dots = 0;
+    func.walk([&](DotOp) { ++dots; });
+    int64_t words = dots * kWordsPerKStep;
+    if (words > tta::target::kProgramWords)
+      func.emitWarning() << "ttatlas-normalize: unrolled to " << dots
+                         << " dots, at least " << words
+                         << " program words; Atlas runs at most "
+                         << tta::target::kProgramWords
+                         << " words per program, so this kernel will likely "
+                            "fail the program-size check";
+  });
 }
 
 // The dot that accumulates onto `dot` next: its only user, in the same block,
@@ -128,14 +157,15 @@ bool foldBias(ModuleOp module, bool option) {
 }
 
 struct Normalize : impl::NormalizeBase<Normalize> {
-  using NormalizeBase::NormalizeBase; // takes NormalizeOptions
-                                      // (fold-bias-into-dot)
+  // Takes NormalizeOptions (fold-bias-into-dot).
+  using NormalizeBase::NormalizeBase;
 
   void runOnOperation() override {
     // Unroll first: a K loop's dots form a chain only once unrolled, and the
     // bias unfold must see the whole chain.
     if (failed(unrollLoops(getOperation())))
       return signalPassFailure();
+    warnIfProgramTooLarge(getOperation());
     bool fold = foldBias(getOperation(), foldBiasIntoDot);
     int32_t id = 0;
     for (SmallVector<DotOp> &chain : findChains(getOperation())) {
