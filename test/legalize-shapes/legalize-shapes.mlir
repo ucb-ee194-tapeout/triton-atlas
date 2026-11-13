@@ -23,7 +23,8 @@ func.func @pad_elementwise_edge(%a: tensor<50x32xf32>, %b: tensor<50x32xf32>) ->
 }
 
 // CHECK-LABEL: func.func @pad_elementwise_edge
-// CHECK: tensor.pad {{.*}}ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [50, 32]>
+// CHECK: tensor.pad
+// CHECK: } {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [50, 32]>
 // CHECK-COUNT-2: linalg.add
 
 // -----
@@ -40,14 +41,15 @@ func.func @pad_max_reduction(%input: tensor<50x32xf32>, %init: tensor<50xf32>) -
 }
 
 // CHECK-LABEL: func.func @pad_max_reduction
-// CHECK: tensor.pad {{.*}}ttatlas.pad = #ttatlas.pad<neutral = neg_inf, logical_shape = [50, 32]>
+// CHECK: tensor.pad
+// CHECK: } {ttatlas.pad = #ttatlas.pad<neutral = neg_inf, logical_shape = [50, 32]>
 // CHECK-COUNT-2: linalg.reduce
 
 // -----
 
 func.func @conflicting_unit(%a: tensor<32x32xf32>, %b: tensor<32x32xf32>) -> tensor<32x32xf32> {
   // expected-error @+1 {{atlas: unsupported linalg.matmul: linalg.matmul has conflicting ttatlas.mxu; expected 0}}
-  %result = linalg.matmul ins(%a, %b : tensor<32x32xf32>, tensor<32x32xf32>) outs(%a : tensor<32x32xf32>) {ttatlas.mxu = 1 : i32} -> tensor<32x32xf32>
+  %result = linalg.matmul {ttatlas.mxu = 1 : i32} ins(%a, %b : tensor<32x32xf32>, tensor<32x32xf32>) outs(%a : tensor<32x32xf32>) -> tensor<32x32xf32>
   return %result : tensor<32x32xf32>
 }
 
