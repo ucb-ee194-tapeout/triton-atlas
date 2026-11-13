@@ -3,6 +3,7 @@
 // lanes run it on hand-written fixtures. Contracts: triton-atlas design agenda,
 // each pass's page. Pass shape (one file, GEN_PASS_DEF, impl::...Base) follows
 // triton v3.9.0 third_party/amd/lib/TritonAMDGPUToLLVM.
+#include "TritonToAtlasVirtual/LaneValues.h"
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "TTAtlas/AtlasTarget.h"
@@ -196,6 +197,28 @@ bool isCroppedTiles(Value value) {
   return isTile(source) || builtFromTiles(crop.getSource());
 }
 
+// The tiles of a stored value and where each sits, as [row, col]: the value
+// itself when it is one tile, else the constant tile insert_slices that build
+// it. Each tile is the op that yields it (null for a block argument). Empty
+// when the value has neither form.
+SmallVector<std::pair<Operation *, std::pair<int64_t, int64_t>>>
+storedTiles(Value value) {
+  SmallVector<std::pair<Operation *, std::pair<int64_t, int64_t>>> tiles;
+  if (isTile(value.getType())) {
+    tiles.push_back({value.getDefiningOp(), {0, 0}});
+    return tiles;
+  }
+  if (!builtFromTiles(value))
+    return tiles;
+  while (auto insert = value.getDefiningOp<tensor::InsertSliceOp>()) {
+    ArrayRef<int64_t> offset = insert.getStaticOffsets();
+    tiles.push_back({insert.getSource().getDefiningOp(),
+                     {offset.size() > 1 ? offset[0] : 0, offset.back()}});
+    value = insert.getDest();
+  }
+  return tiles;
+}
+
 bool isFloatTensor(Type type) {
   return isa<RankedTensorType>(type) &&
          isa<FloatType>(getElementTypeOrSelf(type));
@@ -386,6 +409,52 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
     });
   }
 
+  // Pass 4 promised that the producer of every stored tile with padded lanes
+  // carries a ttatlas.pad tag (the tile's logical shape, for pass 6). Pass 5
+  // erases casts and pass-through generics, so a tag that did not move with
+  // its value is lost here. The real lanes of the store are its crop from the
+  // origin, cut down by its mask, and a tile is partial when they do not
+  // fill it.
+  void checkBoundaryTags(ModuleOp module) {
+    module.walk([&](StoreOp store) {
+      Value value = store.getValue();
+      auto type = dyn_cast<RankedTensorType>(value.getType());
+      if (!type || type.getRank() > 2)
+        return;
+      SmallVector<int64_t> real(type.getShape());
+      if (auto crop = value.getDefiningOp<tensor::ExtractSliceOp>();
+          crop &&
+          llvm::all_of(crop.getMixedOffsets(),
+                       [](OpFoldResult at) { return isZeroInteger(at); }) &&
+          crop.getType().hasStaticShape() &&
+          crop.getType().getRank() == crop.getSourceType().getRank()) {
+        real.assign(crop.getType().getShape().begin(),
+                    crop.getType().getShape().end());
+        value = crop.getSource();
+      }
+      if (Value mask = store.getMask())
+        if (std::optional<SmallVector<int64_t>> bounds = maskBounds(mask);
+            bounds && bounds->size() == real.size())
+          for (auto [at, bound] : llvm::zip(real, *bounds))
+            at = std::min(at, bound);
+      for (auto [producer, offset] : storedTiles(value)) {
+        SmallVector<int64_t> origin = {offset.first, offset.second};
+        if (real.size() == 1)
+          origin = {offset.second};
+        bool partial = false, empty = false;
+        for (auto [axis, at] : llvm::enumerate(real)) {
+          int64_t inside = at - origin[axis];
+          empty |= inside <= 0;
+          partial |= inside < target::kTileSize;
+        }
+        // A rank-1 tile is a row of 32 lanes.
+        if (partial && !empty && (!producer || !producer->hasAttr(tta::kPad)))
+          broken(store, "a stored tile with padded lanes has no ttatlas.pad "
+                        "on the op that produces it");
+      }
+    });
+  }
+
   // Pass 5: FP8 matmul inputs; every other float value or pointer is BF16 or
   // FP8, inside linalg bodies too. A matmul chain's accumulator stays in the
   // MXU, so the matmuls, the linalg.fill that seeds them and what that fill
@@ -393,6 +462,7 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
   // readout marker, a linalg.generic{arith.truncf f32 -> bf16}, whose body
   // reads that f32.
   void checkStage5(ModuleOp module) {
+    checkBoundaryTags(module);
     llvm::SmallPtrSet<Operation *, 16> accumulator, readouts;
     module.walk([&](Operation *op) {
       if (!isMatmul(op))

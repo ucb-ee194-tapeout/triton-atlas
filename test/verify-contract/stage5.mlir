@@ -132,3 +132,40 @@ tt.func @partial_stored(%a: tensor<32x32xf8E4M3FN>, %p: tensor<32x32x!tt.ptr<f32
   tt.store %p, %m0 : tensor<32x32x!tt.ptr<f32>>
   tt.return
 }
+
+// -----
+
+// Pass 4's boundary tags must survive pass 5: a store of a 16x16 crop of one tile keeps a tag on the op that produces the
+// tile (here a pass-through add).
+#padded = #ttatlas.pad<neutral = zero, logical_shape = [16, 16]>
+tt.func @cropped_store_tagged(%p: !tt.ptr<bf16>, %x: tensor<32x32xbf16>) {
+  %e = tensor.empty() : tensor<32x32xbf16>
+  %y = linalg.add {ttatlas.pad = #padded} ins(%x, %x : tensor<32x32xbf16>, tensor<32x32xbf16>) outs(%e : tensor<32x32xbf16>) -> tensor<32x32xbf16>
+  %crop = tensor.extract_slice %y[0, 0] [16, 16] [1, 1] : tensor<32x32xbf16> to tensor<16x16xbf16>
+  %ptrs = tt.splat %p : !tt.ptr<bf16> -> tensor<16x16x!tt.ptr<bf16>>
+  tt.store %ptrs, %crop : tensor<16x16x!tt.ptr<bf16>>
+  tt.return
+}
+
+// -----
+
+// The same store with the tag gone (what erasing a cast with the tag on it used to leave): the tile has padded lanes and
+// nothing tells pass 6 its logical shape.
+tt.func @cropped_store_untagged(%p: !tt.ptr<bf16>, %x: tensor<32x32xbf16>) {
+  %e = tensor.empty() : tensor<32x32xbf16>
+  %y = linalg.add ins(%x, %x : tensor<32x32xbf16>, tensor<32x32xbf16>) outs(%e : tensor<32x32xbf16>) -> tensor<32x32xbf16>
+  %crop = tensor.extract_slice %y[0, 0] [16, 16] [1, 1] : tensor<32x32xbf16> to tensor<16x16xbf16>
+  %ptrs = tt.splat %p : !tt.ptr<bf16> -> tensor<16x16x!tt.ptr<bf16>>
+  // expected-error @below {{contract of pass 5 broken: a stored tile with padded lanes has no ttatlas.pad}}
+  tt.store %ptrs, %crop : tensor<16x16x!tt.ptr<bf16>>
+  tt.return
+}
+
+// -----
+
+// A whole-tile store needs no tag.
+tt.func @whole_tile_store(%p: !tt.ptr<bf16>, %x: tensor<32x32xbf16>) {
+  %ptrs = tt.splat %p : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>
+  tt.store %ptrs, %x : tensor<32x32x!tt.ptr<bf16>>
+  tt.return
+}
