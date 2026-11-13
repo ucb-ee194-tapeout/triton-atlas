@@ -63,6 +63,13 @@ LogicalResult maskPaddedReductions(RewriterBase &rewriter, linalg::LinalgOp op,
                                    const MaskBoxes &boxes,
                                    SmallVectorImpl<Operation *> &created);
 
+// Copies.cpp: a tt.store of a tt.load with no compute between them has no
+// linalg op to pad and tile it. Puts the boundary forms of the stage-4
+// contract around it: the load padded up to whole tiles by one tagged
+// tensor.pad, cut into tile slices, put back together by tile insert_slices,
+// and cropped to the stored shape.
+LogicalResult tileBareCopies(ModuleOp module);
+
 // Padding.cpp: pads `op` up to whole Atlas tiles with its neutral element.
 LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
                               linalg::LinalgOp &paddedOp,

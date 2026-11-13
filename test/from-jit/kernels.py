@@ -178,3 +178,21 @@ def add_64x16(X, Y):
     off = r[:, None] * 16 + c[None, :]
     x = tl.load(X + off).to(tl.float32)
     tl.store(Y + off, (x + x).to(tl.bfloat16))
+
+
+# A 16x16 BF16 copy, no compute: the load grows to a tile through a tagged pad, and the store crops it back.
+@triton.jit
+def copy_16(X, Y):
+    r = tl.arange(0, 16)
+    off = r[:, None] * 16 + r[None, :]
+    tl.store(Y + off, tl.load(X + off))
+
+
+# A masked BF16 copy of the first 50 rows of a 64x32 block: two row tiles, the second with 18 real rows, no compute.
+@triton.jit
+def copy_rows_50(X, Y):
+    r = tl.arange(0, 64)
+    c = tl.arange(0, 32)
+    off = r[:, None] * 32 + c[None, :]
+    mask = (r < 50)[:, None]
+    tl.store(Y + off, tl.load(X + off, mask=mask, other=0.0), mask=mask)

@@ -121,6 +121,11 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       return;
     }
 
+    if (failed(tileBareCopies(module))) {
+      signalPassFailure();
+      return;
+    }
+
     LiveOps tracker;
     IRRewriter rewriter(module.getContext(), &tracker);
     for (Operation *op : computeOps)
