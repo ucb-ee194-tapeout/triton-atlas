@@ -78,27 +78,68 @@ void privatize(Operation *user, unsigned index) {
   user->setOperand(index, builder.clone(*def)->getResult(0));
 }
 
+// Whether `generic` only passes its input through, so linalg's
+// canonicalization erases it: one input, one result of the same type, all
+// loops parallel, identity maps, and a body that yields its input.
+bool isPassThrough(linalg::GenericOp generic) {
+  if (generic.getNumDpsInputs() != 1 || generic->getNumResults() != 1 ||
+      !llvm::all_of(generic.getIteratorTypesArray(),
+                    [](utils::IteratorType type) {
+                      return type == utils::IteratorType::parallel;
+                    }) ||
+      !llvm::all_of(generic.getIndexingMapsArray(),
+                    [](AffineMap map) { return map.isIdentity(); }))
+    return false;
+  auto yield = cast<linalg::YieldOp>(generic.getBody()->getTerminator());
+  return yield->getOperand(0) == generic.getBody()->getArgument(0) &&
+         generic.getDpsInputs()[0].getType() == generic->getResult(0).getType();
+}
+
 // Moves the ttatlas.* tags of `from`, an op about to be erased in favour of
-// `to`, onto the op defining `to`. Pass 4 tags a stored value's defining op
-// with ttatlas.pad, and pass 6 reads it there; when that op is a cast or a
-// pass-through generic this pass erases, the tag must move to the value that
-// replaces it. A tag already on the target wins. Fails, with an error, when
-// ttatlas.pad has nowhere to go (no defining op, or a constant, which the
-// dialect doesn't allow a pad on).
-LogicalResult moveTags(Operation *from, Value to, RewriterBase &rewriter) {
+// `to`, onto the op that will define the replacing value: the op defining
+// `to`, looking through pass-through generics that are erased too. Pass 4
+// tags a stored value's defining op with ttatlas.pad, and pass 6 reads it
+// there; when that op is a cast or a pass-through generic this pass erases,
+// the tag must move with the value. Another tag already on the target wins.
+// For ttatlas.pad it fails, with an error, rather than drop or spread it: when
+// it has nowhere to go (no defining op, or a constant, which the dialect
+// doesn't allow a pad on), when the target has a different pad, or, if
+// `checkUses`, when the value it would land on has other users, which would
+// then look padded too. (Uses aren't counted inside the dialect conversion,
+// where the old ones are still present.)
+LogicalResult moveTags(Operation *from, Value to, RewriterBase &rewriter,
+                       bool checkUses) {
+  bool onlyUser = to.hasOneUse();
+  while (auto generic = to.getDefiningOp<linalg::GenericOp>()) {
+    if (!isPassThrough(generic))
+      break;
+    to = generic.getDpsInputs()[0];
+    onlyUser = onlyUser && to.hasOneUse();
+  }
   Operation *target = to.getDefiningOp();
   for (NamedAttribute attr : from->getDiscardableAttrs()) {
     if (!attr.getName().strref().starts_with("ttatlas."))
       continue;
+    bool pad = attr.getName() == tta::kPad;
     if (!target || isa<arith::ConstantOp>(target)) {
-      if (attr.getName() == tta::kPad)
+      if (pad)
         return tta::emitUnsupported(from, "ttatlas.pad can't move to the "
                                           "value that replaces this op");
       continue;
     }
-    if (!target->hasAttr(attr.getName()))
-      rewriter.modifyOpInPlace(
-          target, [&] { target->setAttr(attr.getName(), attr.getValue()); });
+    if (Attribute existing = target->getAttr(attr.getName())) {
+      if (pad && existing != attr.getValue())
+        return tta::emitUnsupported(from, "ttatlas.pad differs from the one "
+                                          "on the value that replaces this "
+                                          "op");
+      continue;
+    }
+    if (pad && checkUses && !onlyUser)
+      return tta::emitUnsupported(from, "ttatlas.pad would also apply to the "
+                                        "other users of the value that "
+                                        "replaces this op");
+    rewriter.modifyOpInPlace(
+        target, [&] { target->setAttr(attr.getName(), attr.getValue()); });
   }
   return success();
 }
@@ -291,7 +332,7 @@ struct EraseIdentityCast : OpConversionPattern<CastOp> {
     Type type = this->getTypeConverter()->convertType(op.getType());
     if (type != adaptor.getIn().getType())
       return failure();
-    if (failed(moveTags(op, adaptor.getIn(), rewriter)))
+    if (failed(moveTags(op, adaptor.getIn(), rewriter, /*checkUses=*/false)))
       return failure();
     rewriter.replaceOp(op, adaptor.getIn());
     return success();
@@ -338,18 +379,15 @@ LogicalResult eraseIdentityGenerics(ModuleOp module) {
   // Their tags first move to the input's defining op (moveTags), since the
   // canonicalization pattern drops them with the generic.
   IRRewriter rewriter(module.getContext());
+  // moveTags looks through chained pass-throughs, so a tag lands on the real
+  // producer even when several of them are erased in a row.
   WalkResult moved = module.walk([&](linalg::GenericOp generic) {
-    if (generic.getNumDpsInputs() != 1 || generic->getNumResults() != 1 ||
-        !llvm::all_of(generic.getIndexingMapsArray(),
-                      [](AffineMap map) { return map.isIdentity(); }))
+    if (!isPassThrough(generic))
       return WalkResult::advance();
-    auto yield = cast<linalg::YieldOp>(generic.getBody()->getTerminator());
-    Value input = generic.getDpsInputs()[0];
-    if (yield->getOperand(0) != generic.getBody()->getArgument(0) ||
-        input.getType() != generic->getResult(0).getType())
-      return WalkResult::advance();
-    return failed(moveTags(generic, input, rewriter)) ? WalkResult::interrupt()
-                                                      : WalkResult::advance();
+    return failed(moveTags(generic, generic.getDpsInputs()[0], rewriter,
+                           /*checkUses=*/true))
+               ? WalkResult::interrupt()
+               : WalkResult::advance();
   });
   if (moved.wasInterrupted())
     return failure();
