@@ -1,4 +1,4 @@
-// Pass 4: tile linalg at the Atlas tile size, fuse sliced tensor producers,
+// Pass 4: tile linalg at the Atlas tile size (MLIR's SCF tile-and-fuse driver),
 // fully unroll the static tile loops, and attach the MXU policy tag.
 #include "TritonToAtlasVirtual/Passes.h"
 
@@ -7,12 +7,14 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/Transforms/TileUsingInterface.h"
 #include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/TilingInterface.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -450,80 +452,107 @@ propagateStorePadTags(const DenseMap<Operation *, Attribute> &storePadTags) {
   return success();
 }
 
-static bool setMxuZero(Operation *op) {
+// True when `op` carries a ttatlas.mxu other than 0; reports it. A matmul must
+// stay on MXU0 because MXU1 cannot run a K chain.
+static bool hasConflictingMxu(Operation *op) {
   Attribute oldUnit = op->getAttr(ttatlas::kMxu);
-  auto oldInteger = dyn_cast_or_null<IntegerAttr>(oldUnit);
-  if (oldUnit && (!oldInteger || !oldInteger.getType().isSignlessInteger(32) ||
-                  oldInteger.getInt() != 0)) {
-    ttatlas::emitUnsupported(
-        op, "linalg.matmul has conflicting ttatlas.mxu; expected 0");
+  if (!oldUnit)
     return false;
-  }
+  auto oldInteger = dyn_cast<IntegerAttr>(oldUnit);
+  if (oldInteger && oldInteger.getType().isSignlessInteger(32) &&
+      oldInteger.getInt() == 0)
+    return false;
+  ttatlas::emitUnsupported(
+      op, "linalg.matmul has conflicting ttatlas.mxu; expected 0");
+  return true;
+}
+
+static bool setMxuZero(Operation *op) {
+  if (hasConflictingMxu(op))
+    return false;
   // atlas-hw: MXU0 is the pass 4 default policy; MXU1 cannot run a K chain.
   op->setAttr(ttatlas::kMxu,
               IntegerAttr::get(IntegerType::get(op->getContext(), 32), 0));
   return true;
 }
 
-static LogicalResult fuseSlicedProducers(ModuleOp module) {
-  IRRewriter rewriter(module.getContext());
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    SmallVector<Operation *> consumers;
-    module.walk([&](Operation *op) {
-      if (isLinalgCompute(op))
-        consumers.push_back(op);
-    });
-    for (Operation *consumer : consumers) {
-      for (OpOperand &operand : consumer->getOpOperands()) {
-        auto slice = operand.get().getDefiningOp<tensor::ExtractSliceOp>();
-        if (!slice)
-          continue;
-        auto producer = slice.getSource().getDefiningOp<linalg::LinalgOp>();
-        if (!producer || producer->getNumResults() != 1)
-          continue;
-        rewriter.setInsertionPoint(consumer);
-        if (succeeded(linalg::fuseProducerOfTensor(
-                rewriter, producer->getResult(0), operand))) {
-          changed = true;
-          break;
-        }
-      }
-      if (changed)
-        break;
+// Tile sizes that cut every dimension larger than one Atlas tile down to one
+// tile and leave smaller ones whole (0 means "do not tile this loop"). With
+// `parallelOnly`, reduction loops are left whole: producers (a fill feeding the
+// accumulator) can only be fused into a loop nest that does not iterate over
+// the reduction, or they would re-initialize the accumulator on every step.
+static SmallVector<OpFoldResult>
+atlasTileSizes(Builder &builder, linalg::LinalgOp op, bool parallelOnly) {
+  SmallVector<OpFoldResult> sizes;
+  SmallVector<utils::IteratorType> iterators = op.getIteratorTypesArray();
+  for (auto [range, iterator] :
+       llvm::zip_equal(op.getStaticLoopRanges(), iterators)) {
+    bool tile = range > ttatlas::target::kTileSize &&
+                !(parallelOnly && iterator == utils::IteratorType::reduction);
+    sizes.push_back(
+        builder.getIndexAttr(tile ? ttatlas::target::kTileSize : 0));
+  }
+  return sizes;
+}
+
+static bool exceedsTile(Operation *op) {
+  auto linalgOp = dyn_cast<linalg::LinalgOp>(op);
+  return linalgOp &&
+         llvm::any_of(linalgOp.getStaticLoopRanges(),
+                      [](int64_t n) { return n > ttatlas::target::kTileSize; });
+}
+
+// Fuse only linalg producers. Other tiling-interface producers, such as the
+// tensor.pad that carries a ttatlas.pad tag, must stay whole.
+static std::optional<scf::SCFTileAndFuseOptions::ControlFnResult>
+fuseLinalgProducersOnly(tensor::ExtractSliceOp, OpResult producer, bool) {
+  if (!isa<linalg::LinalgOp>(producer.getOwner()))
+    return std::nullopt;
+  return scf::SCFTileAndFuseOptions::ControlFnResult{};
+}
+
+// Fully unroll every tile loop. The walk is post-order, so an inner loop is
+// expanded before the outer loop that is about to clone it.
+static LogicalResult unrollTileLoops(ModuleOp module) {
+  SmallVector<scf::ForOp> loops;
+  module.walk([&](scf::ForOp loop) { loops.push_back(loop); });
+  for (scf::ForOp loop : loops) {
+    if (failed(loopUnrollFull(loop))) {
+      ttatlas::emitUnsupported(
+          loop, "tile loop does not have a statically known trip count");
+      return failure();
     }
   }
   return success();
 }
 
-static LogicalResult unrollTileLoops(ModuleOp module) {
-  // Unrolling an outer loop can clone an inner loop after it was collected.
-  // Iterate to a fixed point so every cloned tile loop is also expanded to
-  // constant slices. The rank-two Atlas surface needs only a few rounds; the
-  // bound prevents a non-unrollable loop from spinning indefinitely.
-  for (unsigned round = 0; round != 8; ++round) {
-    SmallVector<scf::ForOp> loops;
-    module.walk([&](scf::ForOp loop) { loops.push_back(loop); });
-    if (loops.empty())
-      return success();
-    for (scf::ForOp loop : loops) {
-      if (!loop->getBlock())
-        continue;
-      if (failed(loopUnrollFull(loop))) {
-        ttatlas::emitUnsupported(
-            loop, "tile loop does not have a statically known trip count");
-        return failure();
-      }
-    }
+// A linalg.fill overwrites its whole destination, so what the destination held
+// before is dead. Tiling and unrolling leave a tile fill writing a slice of
+// the previous tile's result; hand it a fresh tensor.empty tile instead, which
+// is what the stage-4 contract (and later passes) expect.
+static void freshFillDestinations(ModuleOp module, IRRewriter &rewriter) {
+  SmallVector<linalg::FillOp> fills;
+  module.walk([&](linalg::FillOp fill) {
+    if (!fill.getOutputs().front().getDefiningOp<tensor::EmptyOp>())
+      fills.push_back(fill);
+  });
+  for (linalg::FillOp fill : fills) {
+    auto type = dyn_cast<RankedTensorType>(fill.getOutputs().front().getType());
+    if (!type)
+      continue;
+    rewriter.setInsertionPoint(fill);
+    auto empty = tensor::EmptyOp::create(
+        rewriter, fill.getLoc(), type.getShape(), type.getElementType());
+    rewriter.modifyOpInPlace(
+        fill, [&] { fill.getOutputsMutable()[0].set(empty.getResult()); });
   }
-  SmallVector<scf::ForOp> remaining;
-  module.walk([&](scf::ForOp loop) { remaining.push_back(loop); });
-  if (!remaining.empty())
-    ttatlas::emitUnsupported(remaining.front(),
-                             "tile loop did not fully unroll");
-  return remaining.empty() ? success() : failure();
 }
+
+// Forget ops the rewriter erased, so a worklist never touches a dead pointer.
+struct LiveOps : RewriterBase::Listener {
+  DenseSet<Operation *> live;
+  void notifyOperationErased(Operation *op) override { live.erase(op); }
+};
 
 struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
   void runOnOperation() override {
@@ -568,26 +597,57 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
       }
       if (!validTensorShapes)
         continue;
-      Attribute oldUnit = op->getAttr(ttatlas::kMxu);
-      auto oldInteger = dyn_cast_or_null<IntegerAttr>(oldUnit);
-      if (op->getName().getStringRef() == "linalg.matmul" && oldUnit &&
-          (!oldInteger || !oldInteger.getType().isSignlessInteger(32) ||
-           oldInteger.getInt() != 0)) {
-        ttatlas::emitUnsupported(
-            op, "linalg.matmul has conflicting ttatlas.mxu; expected 0");
+      if (op->getName().getStringRef() == "linalg.matmul" &&
+          hasConflictingMxu(op))
         hadFailure = true;
-      }
     }
     if (hadFailure) {
       signalPassFailure();
       return;
     }
 
-    IRRewriter rewriter(module.getContext());
-    // Tile consumers first. Their constant extract_slice operands are the
-    // anchors the upstream tensor-producer fusion utility uses.
+    LiveOps tracker;
+    IRRewriter rewriter(module.getContext(), &tracker);
+    for (Operation *op : computeOps)
+      tracker.live.insert(op);
+
+    // Split every linalg op larger than a tile, then re-queue the tiles: the
+    // worklist ends when each op is one tile. A tile can still be too large in
+    // a dimension that tiling left whole (a reduction, or an op fused into a
+    // tiled consumer), so this repeats per op until it is not.
+    SmallVector<Operation *> worklist;
+    auto drain = [&]() -> LogicalResult {
+      while (!worklist.empty()) {
+        Operation *op = worklist.pop_back_val();
+        if (!tracker.live.contains(op) || !exceedsTile(op))
+          continue;
+        auto linalgOp = cast<linalg::LinalgOp>(op);
+        scf::SCFTilingOptions options;
+        options.setTileSizes(
+            atlasTileSizes(rewriter, linalgOp, /*parallelOnly=*/false));
+        rewriter.setInsertionPoint(op);
+        FailureOr<scf::SCFTilingResult> tiled =
+            scf::tileUsingSCF(rewriter, cast<TilingInterface>(op), options);
+        if (failed(tiled)) {
+          ttatlas::emitUnsupported(op,
+                                   "MLIR failed to tile the linalg operation");
+          return failure();
+        }
+        ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
+                                    "tile linalg compute to 32x32");
+        rewriter.replaceOp(op, tiled->replacements);
+        for (Operation *tile : tiled->tiledOps) {
+          tracker.live.insert(tile);
+          worklist.push_back(tile);
+        }
+      }
+      return success();
+    };
+
+    // Consumers first, so each producer is fused into its consumer's tiles
+    // before it is looked at on its own.
     for (Operation *op : llvm::reverse(computeOps)) {
-      if (op->getBlock() == nullptr)
+      if (!tracker.live.contains(op))
         continue;
       if (llvm::all_of(op->getResults(),
                        [](Value result) { return result.use_empty(); })) {
@@ -614,48 +674,60 @@ struct LegalizeShapes : impl::LegalizeShapesBase<LegalizeShapes> {
         }
         rewriter.replaceOp(op, replacements);
         op = paddedOp.getOperation();
+        tracker.live.insert(op);
         linalgOp = paddedOp;
       }
-      SmallVector<int64_t> loopSizes(linalgOp.getNumLoops(),
-                                     ttatlas::target::kTileSize);
-      bool needsTiling =
-          llvm::any_of(linalgOp.getStaticLoopRanges(), [](int64_t size) {
-            return size > ttatlas::target::kTileSize;
-          });
-      if (!needsTiling)
+      if (!exceedsTile(op))
         continue;
 
-      linalg::LinalgTilingOptions options;
-      options.setTileSizes(loopSizes);
-      options.setLoopType(linalg::LinalgTilingLoopType::Loops);
-      rewriter.setInsertionPoint(op);
-      auto tiled = linalg::tileLinalgOp(rewriter, linalgOp, options);
-      if (::mlir::failed(tiled)) {
-        ttatlas::emitUnsupported(op,
-                                 "MLIR failed to tile the linalg operation");
-        hadFailure = true;
-        continue;
+      SmallVector<OpFoldResult> sizes =
+          atlasTileSizes(rewriter, linalgOp, /*parallelOnly=*/true);
+      if (llvm::all_of(sizes,
+                       [](OpFoldResult size) { return isZeroInteger(size); })) {
+        // Only reductions are too large: nothing to fuse into, split them
+        // below.
+        worklist.push_back(op);
+      } else {
+        scf::SCFTileAndFuseOptions options;
+        scf::SCFTilingOptions tiling;
+        tiling.setTileSizes(sizes);
+        options.setTilingOptions(tiling);
+        options.setFusionControlFn(fuseLinalgProducersOnly);
+        rewriter.setInsertionPoint(op);
+        FailureOr<scf::SCFTileAndFuseResult> tiled =
+            scf::tileConsumerAndFuseProducersUsingSCF(
+                rewriter, cast<TilingInterface>(op), options);
+        if (failed(tiled)) {
+          ttatlas::emitUnsupported(op,
+                                   "MLIR failed to tile the linalg operation");
+          signalPassFailure();
+          return;
+        }
+        ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
+                                    "tile linalg compute to 32x32");
+        for (auto [original, replacement] : tiled->replacements)
+          rewriter.replaceAllUsesWith(original, replacement);
+        // The consumer's results were replaced; drop it if nothing else needs
+        // it.
+        if (llvm::all_of(op->getResults(),
+                         [](Value r) { return r.use_empty(); }))
+          rewriter.eraseOp(op);
+        for (Operation *tile : tiled->tiledAndFusedOps) {
+          tracker.live.insert(tile);
+          worklist.push_back(tile);
+        }
       }
-      if (tiled->tensorResults.size() != op->getNumResults()) {
-        ttatlas::emitUnsupported(
-            op, "MLIR tiling returned an unexpected result count");
-        hadFailure = true;
-        continue;
-      }
-      ttatlas::recordLegalization(op, "ttatlas-legalize-shapes",
-                                  "tile linalg compute to 32x32");
-      rewriter.replaceOp(op, tiled->tensorResults);
-      if (failed(fuseSlicedProducers(module))) {
+      if (failed(drain())) {
         signalPassFailure();
         return;
       }
     }
 
-    if (failed(fuseSlicedProducers(module)) ||
-        failed(unrollTileLoops(module))) {
+    if (failed(unrollTileLoops(module))) {
       signalPassFailure();
       return;
     }
+    freshFillDestinations(module, rewriter);
 
     if (failed(propagateStorePadTags(storePadTags))) {
       signalPassFailure();
