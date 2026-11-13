@@ -88,6 +88,8 @@ def run_stage(opt, path, k):
                        capture_output=True, text=True)
     if p.returncode == 0:
         return None
+    if p.returncode < 0:  # killed by a signal: a crash, whose first line is LLVM's bug-report banner
+        return f"crashed (signal {-p.returncode})"
     return next((line for line in p.stderr.splitlines() if "error:" in line), p.stderr.strip() or "(no output)")
 
 
