@@ -38,7 +38,7 @@ tt.func @head_mask(%p: !tt.ptr<bf16>) {
   %m = arith.cmpi sgt, %r, %c20s : tensor<32xi32>
   %ps = tt.splat %p : !tt.ptr<bf16> -> tensor<32x!tt.ptr<bf16>>
   %a = tt.addptr %ps, %r : tensor<32x!tt.ptr<bf16>>, tensor<32xi32>
-  // expected-error @below {{edge mask is not a static make_range comparison against a constant}}
+  // expected-error @below {{edge mask is not a compile-time leading box}}
   %x = tt.load %a, %m, %zero : tensor<32x!tt.ptr<bf16>>
   tt.return
 }

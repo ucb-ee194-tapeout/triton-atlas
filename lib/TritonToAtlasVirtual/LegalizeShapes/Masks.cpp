@@ -93,10 +93,8 @@ tagMaskedBoundaries(ModuleOp module,
     std::optional<SmallVector<int64_t>> bounds = maskBounds(mask);
     if (!bounds || bounds->size() != tensor.getShape().size()) {
       ttatlas::emitUnsupported(
-          op,
-          "edge mask is not a static make_range comparison against a constant: "
-          "its true lanes are not a compile-time leading box (a runtime "
-          "bound, or a mask like offs > k)");
+          op, "edge mask is not a compile-time leading box (a runtime bound, "
+              "or a mask like offs > k)");
       failed = true;
       return;
     }
