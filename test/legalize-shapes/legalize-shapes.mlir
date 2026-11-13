@@ -29,8 +29,9 @@ func.func @pad_elementwise_edge(%a: tensor<50x32xf32>, %b: tensor<50x32xf32>) ->
 
 // -----
 
-// Max reductions need -inf in the padded lanes, otherwise an edge lane could
-// incorrectly become the result. The 50 rows become two full 32-row tiles.
+// The 50 rows become two full 32-row tiles. The padded dimension is a parallel one (the reduced one holds 32
+// columns, no padding), so padded rows only produce padded results that are cropped later: any pad value will do,
+// and pass 4 picks zero, the cheapest for the host to fill.
 func.func @pad_max_reduction(%input: tensor<50x32xf32>, %init: tensor<50xf32>) -> tensor<50xf32> {
   %result = linalg.reduce ins(%input : tensor<50x32xf32>) outs(%init : tensor<50xf32>) dimensions = [1]
   (%lhs: f32, %rhs: f32) {
@@ -42,7 +43,7 @@ func.func @pad_max_reduction(%input: tensor<50x32xf32>, %init: tensor<50xf32>) -
 
 // CHECK-LABEL: func.func @pad_max_reduction
 // CHECK: tensor.pad
-// CHECK: } {ttatlas.pad = #ttatlas.pad<neutral = neg_inf, logical_shape = [50, 32]>
+// CHECK: } {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [50, 32]>
 // CHECK-COUNT-2: linalg.reduce
 
 // -----

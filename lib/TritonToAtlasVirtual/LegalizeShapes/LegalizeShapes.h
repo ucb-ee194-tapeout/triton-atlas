@@ -12,6 +12,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 #include <optional>
+#include <string>
 
 namespace mlir::triton {
 
@@ -22,9 +23,20 @@ LogicalResult
 tagMaskedBoundaries(ModuleOp module,
                     DenseMap<Operation *, Attribute> &storePadTags);
 
-// Padding.cpp: the neutral element of an operation or constant.
+// Padding.cpp: the pad value a constant stands for (a tile-wide 0, 1, -inf or
+// +inf), or nothing.
 std::optional<ttatlas::PadNeutral> constantNeutral(Value value);
-std::optional<ttatlas::PadNeutral> operationNeutral(Operation *op);
+
+// Padding.cpp: the value that padded lanes of `op`'s operands must hold. It is
+// the identity of the combiner of each reduction over a padded loop (found with
+// matchReduction, mapped from arith::getNeutralElement), zero for a matmul and
+// for an op that reduces no padded loop. `padded[i]` says whether loop i is
+// padded (empty: all are). Returns nothing, with the reason in `why`, when
+// there is no single value the host can fill. The static path and the masked
+// load path both use it, so they agree.
+std::optional<ttatlas::PadNeutral> operationNeutral(Operation *op,
+                                                    ArrayRef<bool> padded = {},
+                                                    std::string *why = nullptr);
 
 // Padding.cpp: pads `op` up to whole Atlas tiles with its neutral element.
 LogicalResult padToAtlasTiles(IRRewriter &rewriter, linalg::LinalgOp op,
