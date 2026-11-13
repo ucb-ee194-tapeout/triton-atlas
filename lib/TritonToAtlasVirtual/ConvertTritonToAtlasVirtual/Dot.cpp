@@ -55,11 +55,8 @@ static bool isPackedActivation(Value value) {
           cast<RankedTensorType>(generic->getResult(0).getType())
               .getElementType()))
     return false;
-  for (Operation &nested : generic.getBody()->without_terminator())
-    if (auto trunc = dyn_cast<arith::TruncFOp>(nested);
-        trunc->hasAttr(ttatlas::kScale))
-      return true;
-  return false;
+  // Pass 3 hoists the scalar conversion's scale tag to this generic.
+  return generic->hasAttr(ttatlas::kScale);
 }
 
 static FailureOr<int32_t> getMxuUnit(Operation *matmul) {

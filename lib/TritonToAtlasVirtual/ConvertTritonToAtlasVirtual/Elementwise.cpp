@@ -252,7 +252,9 @@ struct ConvertGeneric : ConversionPattern {
       // layers.  Atlas supplies pack_fp8 specifically for this transition;
       // the conversion's scale tag was attached by pass 3.
       if (isa<atlas::VirtualFP8Type>(convertedResult)) {
-        auto scale = compute->getAttrOfType<IntegerAttr>(ttatlas::kScale);
+        // Pass 3 hoists ttatlas tags from the scalar body op onto the
+        // enclosing generic, so the tag survives tiling and fusion.
+        auto scale = op->getAttrOfType<IntegerAttr>(ttatlas::kScale);
         if (!scale)
           return ttatlas::emitUnsupported(
               op, "BF16 to FP8 conversion is missing ttatlas.scale");
