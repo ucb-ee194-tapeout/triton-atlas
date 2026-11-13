@@ -7,7 +7,7 @@ def ConvertTritonComputeToLinalg : Pass<"convert-triton-compute-to-linalg", "mli
     tensor: compute is linalg on tensors (elementwise ops through upstream convert-elementwise-to-linalg, each with
     a fresh tensor.empty output; tt.dot -> linalg.fill zero + linalg.matmul; tt.trans -> linalg.transpose; tt.reduce
     -> linalg.reduce; broadcasts -> linalg.broadcast). tt.load / tt.store, pointers and address math stay TTIR, and
-    tags are copied onto the new ops. Why linalg: MLIR's tiling then gives the tiles in pass 4 (IA-19).
+    tags are copied onto the new ops. Why linalg: MLIR's tiling then gives the tiles in pass 4.
   }];
 
   // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified. linalg joins

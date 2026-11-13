@@ -2,7 +2,7 @@
 #
 # Triton uses exactly one active driver (triton v3.9.0 python/triton/runtime/driver.py), so this one is active
 # only when TRITON_ATLAS_TARGET is set; the NVIDIA and AMD drivers stay usable otherwise.
-# TRITON_ATLAS_TARGET picks the output mode of IA-11 (what the backend delivers):
+# TRITON_ATLAS_TARGET picks what the backend delivers:
 #   virtual  compile only, the deliverable is Atlas virtual IR (CompiledKernel.asm["atlas_virtual"])
 #   npu      run on npu_model (phase 2 of the plan; not implemented yet)
 # The hooks are DriverBase's (triton v3.9.0 python/triton/backends/driver.py:114-157).
