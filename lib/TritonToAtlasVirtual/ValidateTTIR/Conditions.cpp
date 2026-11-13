@@ -121,7 +121,8 @@ LogicalResult checkConversion(Operation *op, EmitFn emit) {
     return fail(emit, "converts " + printed(from) + " to " + printed(to) +
                           "; only BF16 <-> f32 is accepted (no FP8 "
                           "scale-code rule yet)");
-  if (auto fpToFp = dyn_cast<FpToFpOp>(op))
+  bool narrowing = from.isF32() && to.isBF16();
+  if (auto fpToFp = dyn_cast<FpToFpOp>(op); fpToFp && narrowing)
     if (std::optional<RoundingMode> rounding = fpToFp.getRounding();
         rounding && *rounding != RoundingMode::RTNE)
       return fail(emit, "narrows with rounding " +
