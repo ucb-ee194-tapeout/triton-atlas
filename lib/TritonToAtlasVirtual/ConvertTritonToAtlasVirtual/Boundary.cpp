@@ -1,6 +1,7 @@
-// Pass 7 boundary patterns for the IA-19 Linalg + TTIR pipeline.
-// Boundary conversion owns the function ABI and the linear I/O state chain.
-// Compute operations are cloned unchanged for the other registered patterns.
+// Pass 7 boundary patterns for the linalg + TTIR pipeline (compute in linalg,
+// memory in TTIR). Boundary conversion owns the function ABI and the linear I/O
+// state chain. Compute operations are cloned unchanged for the other registered
+// patterns.
 #include "Patterns.h"
 #include "TritonToAtlasVirtual/BoundaryTiles.h"
 #include "TritonToAtlasVirtual/Passes.h"
