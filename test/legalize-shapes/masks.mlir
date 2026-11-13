@@ -116,6 +116,7 @@ tt.func @column_mask(%ptr: !tt.ptr<f32>) {
   %acc = linalg.fill ins(%scalar_zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
   %result = linalg.matmul ins(%a, %b : tensor<32x32xf32>, tensor<32x32xf32>)
                           outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  tt.store %ptrs, %result : tensor<32x32x!tt.ptr<f32>>
   tt.return
 }
 
@@ -146,6 +147,7 @@ tt.func @row_and_column_mask(%ptr: !tt.ptr<f32>) {
   %acc = linalg.fill ins(%scalar_zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
   %result = linalg.matmul ins(%a, %b : tensor<32x32xf32>, tensor<32x32xf32>)
                           outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  tt.store %ptrs, %result : tensor<32x32x!tt.ptr<f32>>
   tt.return
 }
 
@@ -170,5 +172,6 @@ tt.func @expanded_range_mask(%ptr: !tt.ptr<f32>) {
   %acc = linalg.fill ins(%scalar_zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
   %result = linalg.matmul ins(%a, %b : tensor<32x32xf32>, tensor<32x32xf32>)
                           outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  tt.store %ptrs, %result : tensor<32x32x!tt.ptr<f32>>
   tt.return
 }
