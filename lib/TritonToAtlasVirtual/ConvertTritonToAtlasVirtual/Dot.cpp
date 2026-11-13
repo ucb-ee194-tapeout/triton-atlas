@@ -82,6 +82,42 @@ static Operation *createAtlasOp(ConversionPatternRewriter &rewriter,
   return rewriter.create(state);
 }
 
+// Unlike a transposed DRAM weight (which eraseNKTransposes handles before
+// conversion), a transposed on-chip K tile has real semantics.  Lower it to
+// the FP8-only XLU operation so attention can use Q x K^T.
+struct ConvertFP8Transpose : ConversionPattern {
+  ConvertFP8Transpose(const TypeConverter &converter, MLIRContext *context)
+      : ConversionPattern(converter, "linalg.transpose", PatternBenefit(2),
+                          context) {}
+
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (op->getNumOperands() < 1 || op->getNumResults() != 1 ||
+        operands.empty())
+      return failure();
+    auto permutation = op->getAttrOfType<DenseI64ArrayAttr>("permutation");
+    if (!permutation || permutation.asArrayRef() != ArrayRef<int64_t>{1, 0})
+      return ttatlas::emitUnsupported(op,
+                                      "only the FP8 [1, 0] transpose is supported");
+    if (!isa<atlas::VirtualFP8Type>(operands.front().getType()) ||
+        !isa<atlas::VirtualFP8Type>(
+            getTypeConverter()->convertType(op->getResult(0).getType())))
+      return ttatlas::emitUnsupported(op, "Atlas XLU transposes FP8 tiles only");
+    Operation *lowered = createAtlasOp(
+        rewriter, op->getLoc(), atlas::VirtualXLUTransposeOp::getOperationName(),
+        ValueRange{operands.front()}, TypeRange{operands.front().getType()});
+    Operation *empty = op->getNumOperands() > 1
+                           ? op->getOperand(1).getDefiningOp()
+                           : nullptr;
+    rewriter.replaceOp(op, lowered->getResults());
+    if (empty && empty->getName().getStringRef() == "tensor.empty" &&
+        empty->use_empty())
+      rewriter.eraseOp(empty);
+    return success();
+  }
+};
+
 static bool isZeroFill(Operation *fill) {
   if (!fill || fill->getName().getStringRef() != "linalg.fill" ||
       fill->getNumOperands() < 2)
@@ -122,13 +158,6 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
                        logicalTranspose->getName().getStringRef() ==
                            "linalg.transpose" &&
                        isPackedFP8Tile(logicalTranspose->getOperand(0)));
-  // The matmul lowering below emits the XLU transpose itself for this case.
-  // Mark the source linalg op for removal so its generic rejection pattern
-  // cannot run afterward on an operation whose only semantic use is gone.
-  bool consumePackedTranspose =
-      packedWeight && logicalTranspose &&
-      logicalTranspose->getName().getStringRef() == "linalg.transpose" &&
-      logicalTranspose->getResult(0).hasOneUse();
   if ((!role || (*role != Role::weight_fp8_nk &&
                  *role != Role::weight_fp8_kn)) &&
       !packedWeight)
@@ -148,6 +177,12 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
         matmul,
         "matmul left operand requires an activation_fp8 slot or a packed "
         "result from the preceding MLP layer");
+  // Let ConvertFP8Transpose produce the XLU result first.  It avoids
+  // duplicating the transpose when this matmul is revisited by conversion.
+  if (packedWeight && logicalTranspose &&
+      logicalTranspose->getName().getStringRef() == "linalg.transpose" &&
+      !isa<atlas::VirtualFP8Type>(operands[1].getType()))
+    return failure();
 
   Operation *fill = matmul->getOperand(2).getDefiningOp();
   // ConvertMatmul already checked the structural zero-fill seed before it
@@ -166,11 +201,7 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
     if (Operation *transpose = matmul->getOperand(1).getDefiningOp();
         transpose && transpose->getName().getStringRef() == "linalg.transpose")
       weight = rewriter.getRemappedValue(transpose->getOperand(0));
-  if ((role && *role == Role::weight_fp8_kn) ||
-      (packedWeight && logicalTranspose &&
-       logicalTranspose->getName().getStringRef() == "linalg.transpose")) {
-    if (!role)
-      weight = rewriter.getRemappedValue(logicalTranspose->getOperand(0));
+  if (role && *role == Role::weight_fp8_kn) {
     Type fp8 = atlas::VirtualFP8Type::get(matmul->getContext());
     Operation *transpose =
         createAtlasOp(rewriter, matmul->getLoc(),
@@ -187,16 +218,6 @@ static LogicalResult replaceMatmul(Operation *matmul, ArrayRef<Value> operands,
           builder.getNamedAttr("unit", builder.getI32IntegerAttr(*unit))});
 
   rewriter.replaceOp(matmul, lowered->getResults());
-  if (consumePackedTranspose) {
-    Value destination = logicalTranspose->getNumOperands() > 1
-                            ? logicalTranspose->getOperand(1)
-                            : Value();
-    rewriter.eraseOp(logicalTranspose);
-    if (Operation *empty = destination ? destination.getDefiningOp() : nullptr;
-        empty && empty->getName().getStringRef() == "tensor.empty" &&
-        empty->use_empty())
-      rewriter.eraseOp(empty);
-  }
   // The zero fill stays: other matmuls may share it (CSE merges equal fills),
   // and the driver sweeps it once nothing reads it.
   return success();
@@ -443,7 +464,8 @@ void eraseNKTransposes(ModuleOp module) {
 
 void populateDotPatterns(TypeConverter &typeConverter,
                          RewritePatternSet &patterns) {
-  patterns.add<ConvertMatmul>(typeConverter, patterns.getContext());
+  patterns.add<ConvertFP8Transpose, ConvertMatmul>(typeConverter,
+                                                    patterns.getContext());
 }
 
 } // namespace mlir::triton
