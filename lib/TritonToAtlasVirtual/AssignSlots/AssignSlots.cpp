@@ -239,7 +239,11 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
           Value mask = load ? load.getMask() : store.getMask();
           if (mask) {
             reject("masked accesses are unsupported; a whole unmasked tile is "
-                   "required");
+                   "required "
+                   "(a masked load or store, whose tile shape comes from its "
+                   "mask, is "
+                   "not supported yet: planned for the next slot-assignment "
+                   "change)");
             return;
           }
           if (load && load.getIsVolatile()) {

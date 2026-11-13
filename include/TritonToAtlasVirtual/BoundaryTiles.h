@@ -60,7 +60,9 @@ collectBoundaryTiles(triton::FuncOp function,
     if ((load && load.getMask()) || (store && store.getMask()))
       return ttatlas::emitUnsupported(
           &op,
-          "masked accesses are unsupported; a whole unmasked tile is required");
+          "masked accesses are unsupported; a whole unmasked tile is required "
+          "(a masked load or store, whose tile shape comes from its mask, is "
+          "not supported yet: planned for the next slot-assignment change)");
     if (load && load.getIsVolatile())
       return ttatlas::emitUnsupported(
           &op, "volatile loads cannot be represented by an input slot");
@@ -74,7 +76,10 @@ collectBoundaryTiles(triton::FuncOp function,
         type.getDimSize(0) < 32 || type.getDimSize(1) < 32)
       return ttatlas::emitUnsupported(
           &op,
-          "expected a static 32x32 tile or larger rank-two boundary tensor");
+          "expected a static 32x32 tile or larger rank-two boundary tensor "
+          "(a sub-tile access, read through a tagged tensor.pad or stored as "
+          "a crop, is not supported yet: planned for the next "
+          "slot-assignment change)");
     if (isBoundaryTile(type)) {
       tiles.push_back({&op, &op, value, {0, 0}});
       continue;
