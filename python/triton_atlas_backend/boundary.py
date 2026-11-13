@@ -6,6 +6,16 @@ broadcast erasure. No dtype conversion or device transfer occurs here.
 """
 import re
 
+# What the host writes into the padded lanes of an input tile, by the pad tag's neutral and element size (little
+# endian): BF16 0x0000, 0xFF80 (-inf), 0x3F80 (1.0), 0x7F80 (+inf); E4M3FN 0x00 and 0x38 (1.0, which has no infinity).
+_FILLS = {
+    None: {1: b"\x00", 2: b"\x00\x00"},
+    "zero": {1: b"\x00", 2: b"\x00\x00"},
+    "neg_inf": {2: b"\x80\xff"},
+    "one": {1: b"\x38", 2: b"\x80\x3f"},
+    "pos_inf": {2: b"\x80\x7f"},
+}
+
 
 def _view(slot, host_shape):
     dtype = slot["host_dtype"]
@@ -39,13 +49,13 @@ def pack_input_tile(host, host_shape, slot):
     if len(host) != height * width * size:
         raise ValueError("host buffer length disagrees with shape and dtype")
     neutral = slot.get("pad_neutral")
-    if neutral not in (None, "zero", "neg_inf"):
+    if neutral not in (None, *_FILLS):
         raise ValueError("unsupported padding neutral")
     if (rows < 32 or cols < 32) and not bias and neutral is None:
         raise ValueError("partial input requires Pass 4 padding neutral")
-    if neutral == "neg_inf" and size != 2:
-        raise ValueError("E4M3FN has no negative infinity")
-    fill = b"\x80\xff" if neutral == "neg_inf" else bytes(size)
+    if neutral in ("neg_inf", "pos_inf") and size != 2:
+        raise ValueError("E4M3FN has no infinity")
+    fill = _FILLS[neutral][size]
     result = bytearray(fill * 1024)
     for r in range(32 if bias else rows):
         start = ((row + (0 if bias else r)) * width + col) * size

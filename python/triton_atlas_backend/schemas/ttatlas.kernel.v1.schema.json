@@ -186,7 +186,9 @@
         "pad_neutral": {
           "enum": [
             "zero",
-            "neg_inf"
+            "neg_inf",
+            "one",
+            "pos_inf"
           ]
         }
       }

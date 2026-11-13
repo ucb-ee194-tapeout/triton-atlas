@@ -76,7 +76,8 @@ class BufferTest(unittest.TestCase):
 
     def test_neutral_and_offsets(self):
         host = b"\x80\x3f" * (20 * 40)
-        for neutral, fill in [("zero", b"\0\0"), ("neg_inf", b"\x80\xff")]:
+        for neutral, fill in [("zero", b"\0\0"), ("neg_inf", b"\x80\xff"), ("one", b"\x80\x3f"),
+                              ("pos_inf", b"\x80\x7f")]:
             packed = pack_input_tile(host, (20, 40), slot((3, 7), neutral=neutral, origin=(4, 9)))
             for r in range(32):
                 for c in range(32):
@@ -98,10 +99,15 @@ class BufferTest(unittest.TestCase):
     def test_missing_neutral_and_fp8_infinity_rejected(self):
         with self.assertRaisesRegex(ValueError, "requires Pass 4"):
             pack_input_tile(bytes(8), (2, 2), slot((2, 2)))
-        entry = slot((2, 2), neutral="neg_inf")
-        entry["host_dtype"] = "f8E4M3FN"
-        with self.assertRaisesRegex(ValueError, "no negative infinity"):
-            pack_input_tile(bytes(4), (2, 2), entry)
+        for neutral in ("neg_inf", "pos_inf"):
+            entry = slot((2, 2), neutral=neutral)
+            entry["host_dtype"] = "f8E4M3FN"
+            with self.assertRaisesRegex(ValueError, "no infinity"):
+                pack_input_tile(bytes(4), (2, 2), entry)
+        # 1.0 does exist in E4M3FN (0x38).
+        one = slot((1, 1), neutral="one")
+        one["host_dtype"] = "f8E4M3FN"
+        self.assertEqual(pack_input_tile(bytes([56]), (1, 1), one), bytes([56]) * 1024)
 
 
 if __name__ == "__main__":
