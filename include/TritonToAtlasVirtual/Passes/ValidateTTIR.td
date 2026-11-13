@@ -8,8 +8,14 @@ def ValidateTTIR : Pass<"ttatlas-validate-ttir", "mlir::ModuleOp"> {
     lowers yet is an error naming the op, the reason and the kernel's source line. This pass owns no rules of its
     own: when a later pass learns to lower something, its op is accepted here in the same change, so the set of
     accepted kernels grows over time.
+
+    Known limit: the pass stops at the first op it rejects, so a kernel fixed for that op may fail again on the next.
   }];
 
-  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.
-  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect"];
+  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified, and every dialect
+  // the op inventory names, so its op names are the registered ones.
+  let dependentDialects = [
+    "mlir::ttatlas::TTAtlasDialect", "mlir::triton::TritonDialect", "mlir::arith::ArithDialect", "mlir::math::MathDialect", "mlir::scf::SCFDialect",
+    "mlir::cf::ControlFlowDialect", "mlir::ub::UBDialect", "mlir::gpu::GPUDialect", "mlir::LLVM::LLVMDialect"
+  ];
 }

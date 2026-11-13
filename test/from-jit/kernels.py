@@ -1,0 +1,123 @@
+"""The @triton.jit kernels test_from_jit.py compiles. Each says where it comes from."""
+import triton
+import triton.language as tl
+
+
+# The MLP fixture's kernel (test/fixtures/mlp.ttir.mlir): relu(x @ w.T + b) on one 32x32 tile.
+@triton.jit
+def mlp(X, W, B, Y):
+    r = tl.arange(0, 32)
+    off = r[:, None] * 32 + r[None, :]
+    x = tl.load(X + off)
+    w = tl.load(W + off)
+    b = tl.load(B + r).to(tl.float32)
+    acc = tl.dot(x, tl.trans(w)) + b[None, :]
+    tl.store(Y + off, tl.maximum(acc, 0.0).to(tl.bfloat16))
+
+
+# The matmul_relu fixture's kernel (test/fixtures/matmul_relu.ttir.mlir): relu(a @ b), f32 output.
+@triton.jit
+def matmul_relu(A, B, C):
+    rows = tl.arange(0, 32)
+    cols = tl.arange(0, 32)
+    a = tl.load(A + rows[:, None] * 32 + cols[None, :])
+    b = tl.load(B + rows[:, None] * 32 + cols[None, :])
+    result = tl.maximum(tl.dot(a, b, tl.full((32, 32), 0.0, tl.float32)), 0.0)
+    tl.store(C + rows[:, None] * 32 + cols[None, :], result)
+
+
+# The mm32 fixture's kernel (test/fixtures/mm32.ttir.mlir): a K loop of 32x32 tiles, K = 128.
+@triton.jit
+def mm32(A, Bm, C, K: tl.constexpr):
+    r = tl.arange(0, 32)
+    a = A + r[:, None] * K + r[None, :]
+    b = Bm + r[:, None] * 32 + r[None, :]
+    acc = tl.zeros((32, 32), tl.float32)
+    for _ in range(0, K // 32):
+        acc = tl.dot(tl.load(a), tl.load(b), acc)
+        a += 32
+        b += 32 * 32
+    tl.store(C + r[:, None] * 32 + r[None, :], acc.to(tl.bfloat16))
+
+
+# Ours: a K loop whose accumulator starts from a bias, so pass 2 moves the bias after the whole chain.
+@triton.jit
+def bias_seeded_k_loop(A, Bm, Bias, C, K: tl.constexpr):
+    r = tl.arange(0, 32)
+    a = A + r[:, None] * K + r[None, :]
+    b = Bm + r[:, None] * 32 + r[None, :]
+    acc = tl.broadcast_to(tl.load(Bias + r).to(tl.float32)[None, :], (32, 32))
+    for _ in range(0, K // 32):
+        acc = tl.dot(tl.load(a), tl.load(b), acc)
+        a += 32
+        b += 32 * 32
+    tl.store(C + r[:, None] * 32 + r[None, :], acc.to(tl.bfloat16))
+
+
+# Ours: a K loop Triton unrolls itself (loop_unroll_factor=2), so its chain reaches pass 2 with no loop.
+@triton.jit
+def unrolled_by_triton(A, Bm, C, K: tl.constexpr):
+    r = tl.arange(0, 32)
+    a = A + r[:, None] * K + r[None, :]
+    b = Bm + r[:, None] * 32 + r[None, :]
+    acc = tl.zeros((32, 32), tl.float32)
+    for _ in tl.range(0, K // 32, loop_unroll_factor=2):
+        acc = tl.dot(tl.load(a), tl.load(b), acc)
+        a += 32
+        b += 32 * 32
+    tl.store(C + r[:, None] * 32 + r[None, :], acc.to(tl.bfloat16))
+
+
+# Ours: dot(x, w) + dot(w, x), which Triton's combine folds into one dot accumulating onto the other.
+@triton.jit
+def dot_plus_dot(A, Bm, C):
+    r = tl.arange(0, 32)
+    off = r[:, None] * 32 + r[None, :]
+    x = tl.load(A + off)
+    w = tl.load(Bm + off)
+    tl.store(C + off, (tl.dot(x, w) + tl.dot(w, x)).to(tl.bfloat16))
+
+
+# Ours: a row max, then a row sum of the shifted rows.
+@triton.jit
+def row_reduce(X, Y):
+    r = tl.arange(0, 32)
+    x = tl.load(X + r[:, None] * 32 + r[None, :]).to(tl.float32)
+    m = tl.max(x, axis=1)
+    s = tl.sum(x - m[:, None], axis=1)
+    tl.store(Y + r, s.to(tl.bfloat16))
+
+
+# From the team's ttir2linalg repo, kernels/atlas_jit_kernels.py lines 32-43 @ 3db3b518: two FP8 layers, packing
+# the hidden layer back to FP8 in the kernel.
+@triton.jit
+def fp8_two_layer(X, W0, W1, Out):
+    r = tl.arange(0, 32)[:, None]
+    c = tl.arange(0, 32)[None, :]
+    x = tl.load(X + r * 32 + c)
+    w0 = tl.load(W0 + r * 32 + c)
+    w1 = tl.load(W1 + r * 32 + c)
+    hidden = tl.dot(x, w0, input_precision='ieee').to(tl.bfloat16)
+    hidden = tl.maximum(hidden, 0.0).to(tl.bfloat16)
+    packed = hidden.to(tl.float8e4nv, fp_downcast_rounding='rtne')
+    output = tl.dot(packed, w1, input_precision='ieee').to(tl.bfloat16)
+    tl.store(Out + r * 32 + c, output)
+
+
+# From the team's ttir2linalg repo, kernels/atlas_jit_kernels.py lines 74-93 @ 3db3b518: static BF16 attention on
+# one tile.
+@triton.jit
+def bf16_simple_attention(Q, K, V, Out):
+    r = tl.arange(0, 32)[:, None]
+    c = tl.arange(0, 32)[None, :]
+    q = tl.load(Q + r * 32 + c)
+    k = tl.load(K + r * 32 + c)
+    v = tl.load(V + r * 32 + c)
+    scores = (tl.dot(q, tl.trans(k), input_precision='ieee') * 0.1767766952966369).to(tl.bfloat16)
+    maximum = tl.max(scores.to(tl.float32), 1).to(tl.bfloat16)
+    shifted = (scores - maximum[:, None]).to(tl.bfloat16)
+    exponential = tl.exp(shifted.to(tl.float32)).to(tl.bfloat16)
+    denominator = tl.sum(exponential.to(tl.float32), 1).to(tl.bfloat16)
+    probability = (exponential / denominator[:, None]).to(tl.bfloat16)
+    result = tl.dot(probability, v, input_precision='ieee').to(tl.bfloat16)
+    tl.store(Out + r * 32 + c, result)

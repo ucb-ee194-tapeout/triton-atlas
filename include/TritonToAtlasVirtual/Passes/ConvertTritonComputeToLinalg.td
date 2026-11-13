@@ -10,7 +10,8 @@ def ConvertTritonComputeToLinalg : Pass<"convert-triton-compute-to-linalg", "mli
     tags are copied onto the new ops. Why linalg: MLIR's tiling then gives the tiles in pass 4.
   }];
 
-  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified. linalg joins
-  // with the first pattern, together with linking it into the plugin: libtriton does not export linalg.
-  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect"];
+  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified, and the dialects
+  // it creates ops of. linalg comes from MLIR's archives linked into the plugin: libtriton doesn't export it.
+  let dependentDialects = ["mlir::arith::ArithDialect", "mlir::linalg::LinalgDialect", "mlir::tensor::TensorDialect",
+                           "mlir::ttatlas::TTAtlasDialect"];
 }

@@ -39,6 +39,13 @@ class AtlasOptions:
     fpsan_homomorphic_casts: bool = False  # JITFunction.run always passes it (triton v3.9.0 runtime/jit.py:734-736)
     enable_fp_fusion: bool = False
     launch_cooperative_grid: bool = False  # Triton's compile hooks read it (triton v3.9.0 runtime/jit.py:658, 672)
+    # Atlas's own options; set per launch (kernel[grid](..., fold_bias_into_dot=True)) or in triton.compile's options.
+    # fold_bias_into_dot: keep a dot's bias as its accumulator and seed the MXU with it (VMATPUSH.ABF16), instead of a
+    # matmul from zero plus a VPU add. Off by default: atlas-mlir lists VMATPUSH.ABF16 as Untested
+    # (docs/hardware-status.md:52 @ 8ee175c). Experimental: nothing lowers the folded form yet (pass 7 rejects it), so
+    # it is for developing pass 7's load-accumulator pattern. Set on the module as ttatlas.fold_bias_into_dot,
+    # which pass 2 reads.
+    fold_bias_into_dot: bool = False
 
     def hash(self):
         return hashlib.sha256(str(self).encode()).hexdigest()
@@ -132,6 +139,9 @@ class AtlasBackend(BaseBackend):
         text = str(mod)
         metadata["name"] = next(line for line in text.splitlines() if "tt.func" in line).split("@")[1].split("(")[0]
         metadata["shared"] = 0
+        # fold_bias_into_dot reaches pass 2 as a module tag (include/TTAtlas/TTAtlas.h), so every IR dump records it.
+        builder = ir.builder(mod.context)
+        mod.set_attr("ttatlas.fold_bias_into_dot", builder.get_bool_attr(options.fold_bias_into_dot))
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.plugin.add_atlas_virtual_pipeline(pm)

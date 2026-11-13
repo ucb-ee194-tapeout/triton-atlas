@@ -138,6 +138,8 @@ static LogicalResult verifyTag(Operation *op, NamedAttribute attr) {
                            std::end(kPrecisionPolicies), ", ") +
                 ")");
   }
+  if (name == kFoldBiasIntoDot)
+    return isa<BoolAttr>(value) ? success() : fail("a bool");
   if (name == kKernel)
     return verifyKernelJson(op, value);
   if (name == kLegalized) {
