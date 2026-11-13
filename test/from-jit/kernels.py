@@ -104,6 +104,23 @@ def fp8_two_layer(X, W0, W1, Out):
     tl.store(Out + r * 32 + c, output)
 
 
+@triton.jit
+def fp8_three_layer(X, W0, W1, W2, Out):
+    """Three FP8 layers with two on-device BF16-to-FP8 handoffs."""
+    r = tl.arange(0, 32)[:, None]
+    c = tl.arange(0, 32)[None, :]
+    x = tl.load(X + r * 32 + c)
+    w0 = tl.load(W0 + r * 32 + c)
+    w1 = tl.load(W1 + r * 32 + c)
+    w2 = tl.load(W2 + r * 32 + c)
+    hidden0 = tl.maximum(tl.dot(x, w0, input_precision='ieee'), 0.0)
+    packed0 = hidden0.to(tl.float8e4nv, fp_downcast_rounding='rtne')
+    hidden1 = tl.maximum(tl.dot(packed0, w1, input_precision='ieee'), 0.0)
+    packed1 = hidden1.to(tl.float8e4nv, fp_downcast_rounding='rtne')
+    output = tl.dot(packed1, w2, input_precision='ieee').to(tl.bfloat16)
+    tl.store(Out + r * 32 + c, output)
+
+
 # From the team's ttir2linalg repo, kernels/atlas_jit_kernels.py lines 74-93 @ 3db3b518: static BF16 attention on
 # one tile.
 @triton.jit
