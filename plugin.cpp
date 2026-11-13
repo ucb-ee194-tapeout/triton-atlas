@@ -10,6 +10,8 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/TensorTilingInterfaceImpl.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -31,6 +33,12 @@ static void registerAtlasDialects(mlir::DialectRegistry *registry) {
   // ("promised by dialect 'func' but never implemented"). The wheel doesn't
   // export it, so we link the library ourselves.
   mlir::func::registerInlinerExtension(*registry);
+  // linalg and tensor ops implement MLIR's TilingInterface through external
+  // models that a registry must add (triton-atlas-opt gets them from
+  // registerAllExtensions). Without them, pass 4 can't tile or pad anything
+  // inside Triton's own process, so a kernel larger than one tile fails there.
+  mlir::linalg::registerTilingInterfaceExternalModels(*registry);
+  mlir::tensor::registerTilingInterfaceExternalModels(*registry);
 }
 
 // Our passes, plus atlas-mlir's check that its virtual IR is well formed, so
