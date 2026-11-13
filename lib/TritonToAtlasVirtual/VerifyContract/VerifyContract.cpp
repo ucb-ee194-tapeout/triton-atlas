@@ -221,7 +221,17 @@ struct VerifyContract : impl::VerifyContractBase<VerifyContract> {
     module.walk([&](Operation *op) {
       if (inLinalgBody(op))
         return;
-      if (isa<DotOp, TransOp, ReduceOp>(op)) {
+      // Only float compute must be gone: pass 3 converts float tensors only,
+      // and an integer transpose, dot or reduce (address math, or rejected by
+      // pass 1) stays TTIR.
+      // A reduce counts by its operands, as pass 3's target judges it (its
+      // result can be a scalar).
+      bool leftCompute =
+          isa<ReduceOp>(op)
+              ? llvm::any_of(op->getOperandTypes(), isFloatTensor)
+              : isa<DotOp, TransOp>(op) &&
+                    llvm::any_of(op->getResultTypes(), isFloatTensor);
+      if (leftCompute) {
         broken(op,
                Twine("TTIR compute is left: ") + op->getName().getStringRef());
         return;
