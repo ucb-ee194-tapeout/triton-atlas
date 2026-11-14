@@ -25,7 +25,7 @@ llvm_args = "$(if $(filter command line,$(origin LLVM)),$(LLVM))" "$(if $(filter
 # Each dot in a name indents it one level.
 .PHONY: help
 help: ## list these commands
-	@awk -F':.*## ' '/^[a-z.]+:.*## /{d = gsub(/\./, ".", $$1); printf "  %*s%-*s %s\n", 2 * d, "", 20 - 2 * d, $$1, $$2}' \
+	@awk -F':.*## ' '/^[a-z.-]+:.*## /{d = gsub(/\./, ".", $$1); printf "  %*s%-*s %s\n", 2 * d, "", 20 - 2 * d, $$1, $$2}' \
 		$(lastword $(MAKEFILE_LIST))
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -90,6 +90,17 @@ setup.triton: setup.llvm ## fetch and compile Triton (4 min, 8 GB); make then bu
 
 .venv/pyvenv.cfg .venv/bin/pre-commit:
 	@echo "error: $@ missing; run make setup" >&2; exit 1
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Bump: move a pinned dependency, then test against it
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Moves the pin and runs the tests, but doesn't commit; the script says what to check first. Triton and LLVM have no
+# bump target: they stay at the Triton wheel's pins.
+.PHONY: bump.atlas-mlir
+bump.atlas-mlir: setup.atlas ## move atlas-mlir to its default branch's head, or REF=<commit or branch>; then test
+	scripts/bump.sh atlas-mlir $(REF)
+	+$(MAKE) test
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Build: this repo's code
