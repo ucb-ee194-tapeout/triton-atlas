@@ -20,6 +20,9 @@
 
 namespace mlir::ttatlas {
 
+// Explicit post-Atlas-lowering handoff; not part of the TTIR passes 1-7.
+void registerFinalizeMachineHandoffPass();
+
 // Tag names. Plain tags hold built-in attributes; slot, k_chain and pad hold
 // the typed attributes above.
 inline constexpr llvm::StringLiteral kHostDtype =

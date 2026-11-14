@@ -2,7 +2,8 @@
 
 Buffers contain already encoded BF16 or E4M3FN elements in row-major order.
 A bias slot [1, N] from a rank-one host vector repeats its row for Pass 7's
-broadcast erasure. No dtype conversion or device transfer occurs here.
+broadcast erasure. Output unpacking also widens BF16 device elements to f32
+when requested by the manifest. No device transfer occurs here.
 """
 import re
 
@@ -64,12 +65,16 @@ def pack_input_tile(host, host_shape, slot):
 
 
 def unpack_output_tile(tile, host, host_shape, slot):
-    """Copy only the logical output rectangle into a mutable encoded host buffer."""
-    if slot["role"] != "output_bf16" or slot["host_dtype"] != "bf16":
-        raise ValueError("outputs require BF16 output slots")
-    size, rows, cols, row, col, height, width, _ = _view(slot, host_shape)
-    if len(tile) != 1024 * size or len(host) != height * width * size:
+    """Crop a BF16 device tile, optionally widening its little-endian bits to f32."""
+    if slot["role"] != "output_bf16" or slot["host_dtype"] not in ("bf16", "f32"):
+        raise ValueError("outputs require BF16 device slots with BF16 or f32 host dtype")
+    _, rows, cols, row, col, height, width, _ = _view({**slot, "host_dtype": "bf16"}, host_shape)
+    size = 4 if slot["host_dtype"] == "f32" else 2
+    if len(tile) != 2048 or len(host) != height * width * size:
         raise ValueError("output buffer length disagrees with shape and dtype")
     for r in range(rows):
         start = ((row + r) * width + col) * size
-        host[start:start + cols * size] = tile[r * 32 * size:(r * 32 + cols) * size]
+        source = tile[r * 64:r * 64 + cols * 2]
+        if size == 4:
+            source = b"".join(b"\x00\x00" + source[c:c + 2] for c in range(0, len(source), 2))
+        host[start:start + cols * size] = source

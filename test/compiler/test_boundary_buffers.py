@@ -96,6 +96,19 @@ class BufferTest(unittest.TestCase):
         packed = pack_input_tile(b"\x80\x3f" * 35, (35, ), slot((1, 3), role="bias_bf16", origin=(0, 32)))
         self.assertEqual(packed, (b"\x80\x3f" * 3 + bytes(58)) * 32)
 
+    def test_f32_output_widens_bf16_and_preserves_surroundings(self):
+        entry = slot((1, 4), role="output_bf16", origin=(1, 2))
+        entry["host_dtype"] = "f32"
+        host = bytearray(b"\x55" * (3 * 8 * 4))
+        # +1, -2, +0, -0: widening inserts low zero bits, with no extra rounding.
+        tile = bytes.fromhex("803f00c000000080") + bytes(2040)
+        unpack_output_tile(tile, host, (3, 8), entry)
+        expected = bytearray(b"\x55" * len(host))
+        expected[40:56] = bytes.fromhex("0000803f000000c00000000000000080")
+        self.assertEqual(host, expected)
+        with self.assertRaisesRegex(ValueError, "buffer length"):
+            unpack_output_tile(tile, bytearray(3 * 8 * 2), (3, 8), entry)
+
     def test_missing_neutral_and_fp8_infinity_rejected(self):
         with self.assertRaisesRegex(ValueError, "requires Pass 4"):
             pack_input_tile(bytes(8), (2, 2), slot((2, 2)))
