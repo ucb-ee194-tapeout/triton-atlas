@@ -3,6 +3,7 @@ import argparse
 import dataclasses
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +18,7 @@ def main():
     parser.add_argument("--stats", type=Path, required=True)
     args = parser.parse_args()
 
+    import npu_model
     import torch
     from npu_model.configs import isa_definition as isa
     from npu_model.configs.hardware.default import DefaultHardwareConfig
@@ -26,8 +28,11 @@ def main():
 
     sys.path.insert(0, str(ATLAS))
     sys.path.insert(0, str(ATLAS / "test"))
-    from test_spill_model_execution import model_instruction
-    from tools.check_program_decode import decode_binary
+    try:  # atlas-mlir test-internal helpers, not a stable API
+        from test_spill_model_execution import model_instruction
+        from tools.check_program_decode import decode_binary
+    except ImportError as error:
+        raise ImportError("atlas-mlir's model_instruction or decode_binary moved; update run_model.py") from error
 
     torch.set_num_threads(1)
     emitted = json.loads(args.program.read_text())
@@ -50,7 +55,10 @@ def main():
     try:
         simulation.run(max_cycles=100000)
         stats = simulation.get_stats()
-        report = dict(numerics="rtl", halted=state.halted, runtime_errors=stats.runtime_errors, cycles=stats.cycles)
+        revision = subprocess.run(["git", "-C", str(Path(npu_model.__file__).parent), "rev-parse", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip() or "unknown"
+        report = dict(numerics="rtl", npu_model_revision=revision, halted=state.halted,
+                      runtime_errors=stats.runtime_errors, cycles=stats.cycles)
         args.stats.write_text(json.dumps(report, indent=2) + "\n")
         if not state.halted or stats.runtime_errors:
             raise RuntimeError(f"model execution failed: {report}")
