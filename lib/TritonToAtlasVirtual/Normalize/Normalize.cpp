@@ -61,8 +61,8 @@ constexpr int64_t kWordsPerKStep = 23;
 // Warns, without failing, when the unrolled kernel likely exceeds Atlas's
 // program size: its dots alone, at kWordsPerKStep words each, already need
 // more than kProgramWords (2048 at our pin). Only a warning, because this is
-// an estimate before tiling (pass 4 multiplies the dots further) and the real
-// size is checked at the end (pass 8); it tells the author early which loop
+// an estimate before tiling (pass 4 multiplies the dots further) and pass 7
+// rejects a kernel over the limit; it tells the author early which loop
 // made the program large.
 void warnIfProgramTooLarge(ModuleOp module) {
   module.walk([](FuncOp func) {
