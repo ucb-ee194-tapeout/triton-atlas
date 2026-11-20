@@ -85,7 +85,7 @@ triton-atlas/
 | Rebuild only the plugin | `make build.plugin` |
 | Run the tests | `make test` |
 | Run some tests | `make test T=<file or folder>`; `LIT_FILTER=<regex>` picks by name |
-| Check numbers on npu_model | `python test/numerical/test_matmul_relu.py --help` (opt-in; needs `make setup.atlas.full`) |
+| Check numbers on npu_model | `make test.numerical` (opt-in; needs `make setup.atlas.full` and the npu_model settings in `env.sh`) |
 | Run passes on one file | `triton-atlas-opt kernel.ttir --ttatlas-pipeline` (all of them) or `--<pass-name>` (one) |
 | Run pass 4 tiling, mask checks, and MXU tagging | `triton-atlas-opt input.mlir --ttatlas-legalize-shapes` |
 | Compile a kernel | `uv run python my_kernel.py` |
@@ -98,6 +98,7 @@ triton-atlas/
 | Build LLVM from source (`mlir-opt`, all tools) | `make setup.llvm.source` (22 min, 9 GB) |
 | Clean up | `make clean`; `make clean.<part>` for one part |
 | List every command | `make help` |
+| Check the setup | `make doctor` |
 
 To add a pass: declare it in its own file under `include/TritonToAtlasVirtual/Passes/` (included from `Passes.td`),
 write it in its own folder under `lib/TritonToAtlasVirtual/`, add it to `Pipeline.cpp`, and add a test folder

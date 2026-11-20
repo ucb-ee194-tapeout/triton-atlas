@@ -44,6 +44,19 @@ dev_tools() {
     uv sync -q --inexact --no-install-project
 }
 
+# The npu_model settings make test.numerical needs. Prints what is wrong and fails, for build.sh to stop and doctor to
+# report.
+npu_model_check() {
+    if [ -z "${NPU_MODEL_ROOT:-}" ] || [ -z "${NPU_MODEL_PYTHON:-}" ]; then
+        echo "NPU_MODEL_ROOT or NPU_MODEL_PYTHON not set; set both in env.sh, as env.example.sh shows"
+        return 1
+    fi
+    PYTHONPATH="$NPU_MODEL_ROOT" "$NPU_MODEL_PYTHON" -c 'import torch, npu_model' 2>/dev/null || {
+        echo "$NPU_MODEL_PYTHON can't import torch and npu_model from $NPU_MODEL_ROOT; fix NPU_MODEL_* in env.sh"
+        return 1
+    }
+}
+
 # Fetch only some paths of submodule $1, at our pin, into $2. llvm-project and triton are far larger than what we need
 # from them, and Git records their pins without a checkout.
 fetch_files() {
