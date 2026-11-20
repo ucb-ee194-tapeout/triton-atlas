@@ -85,6 +85,7 @@ triton-atlas/
 | Rebuild only the plugin | `make build.plugin` |
 | Run the tests | `make test` |
 | Run some tests | `make test T=<file or folder>`; `LIT_FILTER=<regex>` picks by name |
+| Check numbers on npu_model | `python test/numerical/test_matmul_relu.py --help` (opt-in; needs `make setup.atlas.full`) |
 | Run passes on one file | `triton-atlas-opt kernel.ttir --ttatlas-pipeline` (all of them) or `--<pass-name>` (one) |
 | Run pass 4 tiling, mask checks, and MXU tagging | `triton-atlas-opt input.mlir --ttatlas-legalize-shapes` |
 | Compile a kernel | `uv run python my_kernel.py` |
