@@ -5,7 +5,7 @@
 # the error the next stage must give. A row that gets further or stops sooner than it says fails, so the table is the
 # record of which kernels the pipeline takes today; flip a row when a pass learns something new.
 #
-# End-to-end rows also run a whole triton.compile, which must produce the "atlas_virtual" output.
+# A row that passes every stage also runs a whole triton.compile, which must produce the "atlas_virtual" output.
 #
 # Run it with lit (make test T=test/from-jit) or alone: python test/from-jit/test_from_jit.py, with triton-atlas-opt
 # on PATH (source env.sh after a build).
@@ -36,37 +36,43 @@ STAGES = {
     1: ["--ttatlas-validate-ttir"],
     2: ["--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP],
     3: ["--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg"],
-    4: [
-        "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
-        "--ttatlas-legalize-shapes", *CLEANUP
-    ],
+    # Stage k is the passes up to pass k in ORDER, and ends with the stage-k contract check. Pass 5 (dtypes) runs before
+    # pass 4 (shapes): the numbers are the passes', not the order.
     5: [
         "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
-        "--ttatlas-legalize-shapes", *CLEANUP, "--ttatlas-legalize-dtypes", *CLEANUP
+        "--ttatlas-legalize-dtypes", *CLEANUP
+    ],
+    4: [
+        "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
+        "--ttatlas-legalize-dtypes", *CLEANUP, "--ttatlas-legalize-shapes", *CLEANUP
+    ],
+    6: [
+        "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
+        "--ttatlas-legalize-dtypes", *CLEANUP, "--ttatlas-legalize-shapes", "--ttatlas-assign-slots"
+    ],
+    7: [
+        "--ttatlas-validate-ttir", "--ttatlas-normalize", *CLEANUP, "--convert-triton-compute-to-linalg",
+        "--ttatlas-legalize-dtypes", *CLEANUP, "--ttatlas-legalize-shapes", "--ttatlas-assign-slots",
+        "--convert-triton-to-atlas-virtual"
     ],
 }
-LAST = max(STAGES)
+ORDER = [1, 2, 3, 5, 4, 6, 7]
+LAST = ORDER[-1]
 
 FP8, BF16, FP32 = "*fp8e4nv", "*bf16", "*fp32"
 
 
-def row(name, fn, signature, passes_ok=LAST, first_error=None, constexprs=None, end_to_end=False,
-        end_to_end_error=None):
+def row(name, fn, signature, passes_ok=LAST, first_error=None, constexprs=None):
     return dict(name=name, fn=fn, signature=signature, constexprs=constexprs or {}, passes_ok=passes_ok,
-                first_error=first_error, end_to_end=end_to_end or end_to_end_error is not None,
-                end_to_end_error=end_to_end_error)
+                first_error=first_error)
 
 
 # passes_ok: the last stage the kernel passes (0 = not even stage 1). first_error: a regex the next stage's first
-# "error:" line must match; required when passes_ok < LAST. end_to_end_error: a known gap in the full triton.compile,
-# as a regex its error must match (an expected failure); the row fails once the compile succeeds, so flip it then.
+# "error:" line must match; required when passes_ok < LAST.
 ROWS = [
-    row("mlp", kernels.mlp, {"X": FP8, "W": FP8, "B": BF16, "Y": BF16}, end_to_end=True),
-    row("matmul_relu", kernels.matmul_relu, {"A": FP8, "B": FP8, "C": FP32}, end_to_end=True),
-    # Expected end-to-end failure: pass 6 does not read a tile with a row stride other than 32 yet (A's stride is
-    # K = 128), a planned gap for the pass 6 lane's next PR; stages 1-5 run as usual.
-    row("mm32", kernels.mm32, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"}, constexprs={"K": 128},
-        end_to_end_error=r"cannot prove contiguous row-major tile"),
+    row("mlp", kernels.mlp, {"X": FP8, "W": FP8, "B": BF16, "Y": BF16}),
+    row("matmul_relu", kernels.matmul_relu, {"A": FP8, "B": FP8, "C": FP32}),
+    row("mm32", kernels.mm32, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"}, constexprs={"K": 128}),
     row("bias_seeded_k_loop", kernels.bias_seeded_k_loop,
         {"A": FP8, "Bm": FP8, "Bias": BF16, "C": BF16, "K": "constexpr"}, constexprs={"K": 128}),
     row("unrolled_by_triton", kernels.unrolled_by_triton, {"A": FP8, "Bm": FP8, "C": BF16, "K": "constexpr"},
@@ -79,14 +85,8 @@ ROWS = [
     # Pass 1 rejects the BF16 transpose of K (Atlas transposes FP8 only), before it reaches the BF16 dots.
     row("bf16_simple_attention", kernels.bf16_simple_attention, {"Q": BF16, "K": BF16, "V": BF16, "Out": BF16},
         passes_ok=0, first_error=r"unsupported tt\.trans: transposes bf16"),
-    # Expected end-to-end failure: pass 7 splices one K chain at a time, and four output tiles each have a chain
-    # (planned pass 7 fix).
-    row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16},
-        end_to_end_error=r"K-chain state must have one successor"),
-    # Expected end-to-end failure: pass 6 does not read a stored tensor assembled from several tiles yet (planned for
-    # the next pass 6 PR).
-    row("matmul_relu_64x32", kernels.matmul_relu_64x32, {"A": FP8, "Bm": FP8, "C": BF16},
-        end_to_end_error=r"must fully cover a fresh tensor.empty"),
+    row("matmul_64", kernels.matmul_64, {"A": FP8, "Bm": FP8, "C": BF16}),
+    row("matmul_relu_64x32", kernels.matmul_relu_64x32, {"A": FP8, "Bm": FP8, "C": BF16}),
     row("row_sum_scaled_64x16", kernels.row_sum_scaled_64x16, {"X": BF16, "Y": BF16}),
     row("softmax_16", kernels.softmax_16, {"X": BF16, "Y": BF16}),
     row("softmax_masked_20", kernels.softmax_masked_20, {"X": BF16, "Y": BF16}),
@@ -132,21 +132,21 @@ def check_row(opt, r, tmp):
     with open(path, "w") as f:
         f.write(make_ttir(r))
     failures = []
-    for k in STAGES:
+    passed = ORDER.index(r["passes_ok"]) + 1 if r["passes_ok"] else 0  # how many stages must pass
+    for i, k in enumerate(ORDER):
         err = run_stage(opt, path, k)
-        if k <= r["passes_ok"] and err is not None:
+        if i < passed and err is not None:
             failures.append(f"{r['name']}: stage {k} should pass but fails: {err}")
             break
-        if k == r["passes_ok"] + 1:
+        if i == passed:
             if err is None:
                 failures.append(f"{r['name']}: stage {k} should fail (/{r['first_error']}/) but passes; "
                                 f"raise passes_ok in the table")
             elif not re.search(r["first_error"], err):
                 failures.append(f"{r['name']}: stage {k} fails with an unexpected error: {err}")
             break
-    if r["end_to_end"]:
-        # MLIR prints its diagnostics to the process's stderr, not into the exception, so capture fd 2 to match an
-        # expected error.
+    if r["passes_ok"] == LAST:
+        # MLIR prints its diagnostics to the process's stderr, not into the exception, so capture fd 2 to show it.
         with tempfile.TemporaryFile(mode="w+") as log:
             saved = os.dup(2)
             os.dup2(log.fileno(), 2)
@@ -161,12 +161,7 @@ def check_row(opt, r, tmp):
                 os.close(saved)
             log.seek(0)
             stderr = log.read()
-        if r["end_to_end_error"]:
-            if error is None:
-                failures.append(f"{r['name']}: triton.compile now succeeds; drop end_to_end_error from the table")
-            elif not re.search(r["end_to_end_error"], stderr + error):
-                failures.append(f"{r['name']}: triton.compile failed with an unexpected error: {error}")
-        elif error is not None:
+        if error is not None:
             sys.stderr.write(stderr)
             failures.append(f"{r['name']}: triton.compile failed: {error}")
         elif not compiled.asm.get("atlas_virtual"):

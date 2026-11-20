@@ -35,11 +35,34 @@ spec.loader.exec_module(compiler)
 libtriton.passes.plugin.extend_with(str(PLUGIN))
 libtriton.ir.extend_dialects_with(str(PLUGIN))
 
+# One 32x32 BF16 tile copied from A to B: one input slot and one output slot.
+COPY_BF16_TILE = """
+module {
+  tt.func @tile(%a: !tt.ptr<bf16>, %b: !tt.ptr<bf16>) {
+    %r = tt.make_range {start = 0 : i32, end = 32 : i32} : tensor<32xi32>
+    %rows = tt.expand_dims %r {axis = 1 : i32} : tensor<32xi32> -> tensor<32x1xi32>
+    %cols = tt.expand_dims %r {axis = 0 : i32} : tensor<32xi32> -> tensor<1x32xi32>
+    %s = arith.constant dense<32> : tensor<32x1xi32>
+    %scaled = arith.muli %rows, %s : tensor<32x1xi32>
+    %rr = tt.broadcast %scaled : tensor<32x1xi32> -> tensor<32x32xi32>
+    %cc = tt.broadcast %cols : tensor<1x32xi32> -> tensor<32x32xi32>
+    %offsets = arith.addi %rr, %cc : tensor<32x32xi32>
+    %pa = tt.splat %a : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>
+    %p = tt.addptr %pa, %offsets : tensor<32x32x!tt.ptr<bf16>>, tensor<32x32xi32>
+    %x = tt.load %p : tensor<32x32x!tt.ptr<bf16>>
+    %pb = tt.splat %b : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>
+    %q = tt.addptr %pb, %offsets : tensor<32x32x!tt.ptr<bf16>>, tensor<32x32xi32>
+    tt.store %q, %x : tensor<32x32x!tt.ptr<bf16>>
+    tt.return
+  }
+}
+"""
+
 
 class MetadataExportTest(unittest.TestCase):
 
     def manifest(self):
-        golden = json.loads((ROOT / "docs/examples/ttatlas.kernel.v1.json").read_text())
+        golden = json.loads((ROOT / "docs/examples/ttatlas.kernel.v2.json").read_text())
         golden["name"] = "copy"
         return json.dumps(golden)
 
@@ -48,7 +71,7 @@ class MetadataExportTest(unittest.TestCase):
         for mutate in (
                 lambda m: m["inputs"][0].pop("host_dtype"),
                 lambda m: m["inputs"][0].update(index=2),
-                lambda m: m["inputs"][0].update(tile_origin="unknown"),
+                lambda m: m["inputs"][0].update(block=[0, 0, 33, 32]),
                 lambda m: m.update(grid=[2, 1, 1]),
                 lambda m: m["dram_base"].update(output=0x90002000),
                 lambda m: m["outputs"][0].update(role="bias_bf16"),
@@ -61,8 +84,8 @@ class MetadataExportTest(unittest.TestCase):
     def test_native_producer_and_determinism(self):
         command = [
             shutil.which("triton-atlas-opt"),
-            str(ROOT / "test/inputs/boundary-slices.ttir.mlir"), "--ttatlas-assign-slots",
-            "--convert-triton-to-atlas-virtual", "--ttatlas-verify-contract=stage=7", "--verify-atlas-virtual-stream"
+            str(ROOT / "test/convert/metadata.mlir"), "--convert-triton-to-atlas-virtual",
+            "--verify-atlas-virtual-stream"
         ]
         first = subprocess.check_output(command, text=True)
         self.assertEqual(first, subprocess.check_output(command, text=True))
@@ -70,26 +93,18 @@ class MetadataExportTest(unittest.TestCase):
         metadata = {}
         compiler._export_kernel_metadata(module, metadata)
         manifest = json.loads(metadata["ttatlas_kernel"])
-        self.assertEqual(
-            [entry["tile_origin"] for entry in manifest["inputs"]],
-            ["affine_map<()[s0, s1, s2, s3, s4, s5] -> (1, 0)>", "affine_map<()[s0, s1, s2, s3, s4, s5] -> (1, 32)>"])
-        self.assertEqual([entry["host_dtype"] for entry in manifest["outputs"]], ["f32", "f32"])
-        self.assertEqual(manifest["dram_base"]["output"], 0x90001000)
-        self.assertEqual(manifest["legalized"][0]["what"], "f32 output to bf16")
+        self.assertEqual([entry["kind"] for entry in manifest["inputs"]], ["constant", "memory"])
+        self.assertEqual(manifest["inputs"][1]["offset"], 96)
+        self.assertEqual(manifest["inputs"][1]["other"], 0xFF80)
+        self.assertEqual(manifest["dram_base"], {"input": 0x91000000, "output": 0x91001000})
 
     def test_native_options_handoff(self):
-        # Exercise the Python entry point on direct TTIR tiles. Mixed Tensor/
-        # Linalg dialect registration in the Python plugin belongs upstream.
-        source = (ROOT / "test/assign-slots/bf16.mlir").read_text().replace(
-            "tt.return", "tt.store %p, %x {ttatlas.host_dtype = f32} : tensor<32x32x!tt.ptr<bf16>>\n    tt.return")
-        context, module = self.parse(source)
+        context, module = self.parse(COPY_BF16_TILE)
         module.context = context
         metadata = {"num_warps": 1}
-        compiler.AtlasBackend.make_atlas_virtual(module, metadata,
-                                                 compiler.AtlasOptions(layout="tile_major", dram_base=0x90002000))
+        compiler.AtlasBackend.make_atlas_virtual(module, metadata, compiler.AtlasOptions(dram_base=0x90002000))
         manifest = json.loads(metadata["ttatlas_kernel"])
         self.assertEqual(manifest["dram_base"], {"input": 0x90002000, "output": 0x90002800})
-        self.assertEqual({entry["layout"] for entry in manifest["inputs"] + manifest["outputs"]}, {"tile_major"})
         self.assertEqual(metadata["num_warps"], 1)
 
     def test_options_validation_and_cache(self):
@@ -137,7 +152,7 @@ class MetadataExportTest(unittest.TestCase):
             compiler._export_kernel_metadata(module, {})
 
     def test_mismatched_name(self):
-        context, module = self.parse(self.function('{"version":1,"name":"other"}'))
+        context, module = self.parse(self.function('{"version":2,"name":"other"}'))
         with self.assertRaisesRegex(ValueError, "matching the Atlas function name"):
             compiler._export_kernel_metadata(module, {})
 

@@ -2,7 +2,7 @@
 
 // Pass 7's contract: no TTIR is left; one argument-free func.func carrying ttatlas.kernel.
 
-func.func @ok() -> !atlas.virtual_state attributes {ttatlas.kernel = "{\22version\22: 1}"} {
+func.func @ok() -> !atlas.virtual_state attributes {ttatlas.kernel = "{\22version\22: 2}"} {
   %io0 = "atlas.virtual_start"() : () -> !atlas.virtual_state
   return %io0 : !atlas.virtual_state
 }
@@ -10,7 +10,7 @@ func.func @ok() -> !atlas.virtual_state attributes {ttatlas.kernel = "{\22versio
 // -----
 
 // expected-error @below {{contract of pass 7 broken: func.func has arguments}}
-func.func @args(%x: i32) attributes {ttatlas.kernel = "{\22version\22: 1}"} {
+func.func @args(%x: i32) attributes {ttatlas.kernel = "{\22version\22: 2}"} {
   return
 }
 
@@ -36,10 +36,10 @@ module {
 
 // expected-error @below {{contract of pass 7 broken: expected one func.func, found 2}}
 module {
-  func.func @a() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
+  func.func @a() attributes {ttatlas.kernel = "{\22version\22: 2}"} {
     return
   }
-  func.func @b() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
+  func.func @b() attributes {ttatlas.kernel = "{\22version\22: 2}"} {
     return
   }
 }
@@ -48,12 +48,12 @@ module {
 
 // A func.func inside another op is not the kernel, even when the count of top-level ones is right.
 module {
-  func.func @k() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
+  func.func @k() attributes {ttatlas.kernel = "{\22version\22: 2}"} {
     return
   }
   builtin.module {
     // expected-error @below {{contract of pass 7 broken: func.func nested inside another op}}
-    func.func @inner() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
+    func.func @inner() attributes {ttatlas.kernel = "{\22version\22: 2}"} {
       return
     }
   }

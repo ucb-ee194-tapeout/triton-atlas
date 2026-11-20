@@ -4,10 +4,10 @@
 // and the output BF16). The stage-1 contract check runs after it.
 
 // CHECK: tt.func public @mlp
-// CHECK: tt.load %{{.*}} {ttatlas.host_dtype = f8E4M3FN}
-// CHECK: tt.load %{{.*}} {ttatlas.host_dtype = f8E4M3FN}
-// CHECK: tt.load %{{.*}} {ttatlas.host_dtype = bf16}
+// CHECK: tt.load %{{.*}}
+// CHECK: tt.load %{{.*}}
+// CHECK: tt.load %{{.*}}
 // CHECK: tt.trans
 // CHECK: tt.dot
 // CHECK: arith.maxnumf
-// CHECK: tt.store %{{.*}}, %{{.*}} {ttatlas.host_dtype = bf16}
+// CHECK: tt.store %{{.*}}, %{{.*}}

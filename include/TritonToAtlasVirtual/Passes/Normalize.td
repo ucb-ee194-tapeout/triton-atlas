@@ -1,5 +1,5 @@
 // Included from ../Passes.td, which includes mlir/Pass/PassBase.td first.
-// Pass 2 of the TTIR -> Atlas pipeline. Contract: triton-atlas design agenda, page "Pass 2 · ttatlas-normalize".
+// Pass 2 of the TTIR -> Atlas pipeline. Puts TTIR into the forms later passes expect.
 def Normalize : Pass<"ttatlas-normalize", "mlir::ModuleOp"> {
   let summary = "Put TTIR into the forms later passes expect";
   let description = [{

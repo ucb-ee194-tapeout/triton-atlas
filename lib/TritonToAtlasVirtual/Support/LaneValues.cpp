@@ -13,6 +13,9 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace mlir::triton {
 namespace {
 
@@ -371,52 +374,51 @@ std::optional<PointerLanes> evaluatePointer(Value value) {
   return pointerOf(value, ev, 0);
 }
 
-std::optional<SmallVector<int64_t>> maskBounds(Value mask) {
+std::optional<LaneBox> maskBox(Value mask) {
   if (!getElementTypeOrSelf(mask.getType()).isInteger(1))
     return std::nullopt;
   auto lanes = evaluateLanes(mask);
   if (!lanes)
     return std::nullopt;
   unsigned rank = lanes->shape.size();
-  // The extent of the true lanes along each axis, found from the true lane with
-  // the largest index per axis.
-  SmallVector<int64_t> bounds(rank, 0);
+  // The true lanes' extent along each axis, from the smallest and largest
+  // index of a true lane.
+  LaneBox box{SmallVector<int64_t>(rank, std::numeric_limits<int64_t>::max()),
+              SmallVector<int64_t>(rank, 0)};
   SmallVector<int64_t> idx(rank, 0);
-  for (int64_t v : lanes->values) {
-    if (v)
-      for (unsigned d = 0; d < rank; ++d)
-        bounds[d] = std::max(bounds[d], idx[d] + 1);
+  auto next = [&] {
     for (int d = rank - 1; d >= 0; --d) {
       if (++idx[d] < lanes->shape[d])
         break;
       idx[d] = 0;
     }
+  };
+  int64_t trueLanes = 0;
+  for (int64_t v : lanes->values) {
+    if (v) {
+      ++trueLanes;
+      for (unsigned d = 0; d < rank; ++d) {
+        box.lo[d] = std::min(box.lo[d], idx[d]);
+        box.hi[d] = std::max(box.hi[d], idx[d] + 1);
+      }
+    }
+    next();
   }
-  // The true lanes are the leading box exactly when the box holds as many lanes
-  // as there are true lanes and every lane inside it is true.
-  int64_t boxLanes = 1, trueLanes = 0;
-  for (unsigned d = 0; d < rank; ++d)
-    boxLanes *= bounds[d];
-  for (int64_t v : lanes->values)
-    trueLanes += v != 0;
   if (trueLanes == 0)
-    return SmallVector<int64_t>(rank, 0);
-  if (boxLanes != trueLanes)
-    return std::nullopt;
+    return LaneBox{SmallVector<int64_t>(rank, 0),
+                   SmallVector<int64_t>(rank, 0)};
+  // The true lanes are the box exactly when every lane inside it is true and
+  // none outside is.
   std::fill(idx.begin(), idx.end(), 0);
   for (int64_t v : lanes->values) {
     bool inside = true;
     for (unsigned d = 0; d < rank; ++d)
-      inside &= idx[d] < bounds[d];
+      inside &= idx[d] >= box.lo[d] && idx[d] < box.hi[d];
     if (inside != (v != 0))
       return std::nullopt;
-    for (int d = rank - 1; d >= 0; --d) {
-      if (++idx[d] < lanes->shape[d])
-        break;
-      idx[d] = 0;
-    }
+    next();
   }
-  return bounds;
+  return box;
 }
 
 } // namespace mlir::triton

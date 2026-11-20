@@ -40,11 +40,15 @@ struct PointerLanes {
 // tt.expand_dims.
 std::optional<PointerLanes> evaluatePointer(Value value);
 
-// If the true lanes of `mask` are exactly the leading box [0,b0) x [0,b1) x ...
-// of its shape, return the b's (the whole shape when every lane is true; a zero
-// when no lane is true). std::nullopt if the mask is dynamic or its true lanes
-// have any other shape.
-std::optional<SmallVector<int64_t>> maskBounds(Value mask);
+// A box [lo, hi) per axis.
+struct LaneBox {
+  SmallVector<int64_t> lo, hi;
+};
+
+// If the true lanes of `mask` are exactly one axis-aligned box of its shape,
+// return it (an empty box, lo = hi = 0, when no lane is true). std::nullopt if
+// the mask is dynamic or its true lanes have any other shape.
+std::optional<LaneBox> maskBox(Value mask);
 
 } // namespace mlir::triton
 

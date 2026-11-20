@@ -32,9 +32,8 @@ LogicalResult checkConditions(Operation *op, EmitFn emit);
 // The element type a load or store moves in host memory: the pointee of its
 // pointer operand (one pointer or a tensor of them). Triton's type verifier
 // gives a tensor of pointers an integer or float pointee ("pointer types must
-// point to integer or floating-point types"). Any other pointee never gets a
-// host dtype, since host dtypes are recorded only after the conversion
-// succeeds: a pointer is reached only through a scalar pointer, rejected as a
+// point to integer or floating-point types"). Any other pointee is never
+// reached: a pointer is reached only through a scalar pointer, rejected as a
 // scalar load or store, and a tensor (a legacy pointer to a tensor) fails the
 // load and store dtype checks.
 inline Type pointee(Value ptr) {

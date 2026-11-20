@@ -43,10 +43,6 @@ inline constexpr int kMxuWeightsPerUnit = mlir::atlas::MXUOwnership::kSlots;
 inline constexpr int kMxuAccumulatorsPerUnit =
     mlir::atlas::MXUOwnership::kSlots;
 
-// pack_fp8 scale codes (docs/compiler-pipeline.md:154).
-inline constexpr int kScaleCodeMin = 122;
-inline constexpr int kScaleCodeMax = 128;
-
 // The most instruction words one program may have at our pin: 2048 (8 KiB),
 // counting the delays that timing adds, although the IMEM holds 128 KiB
 // (include/Atlas/AtlasGeneratedArtifact.h:11-12, docs/host-launch.md:29). A
@@ -71,8 +67,9 @@ static_assert(
 static_assert(kProgramWords == 2048,
               "atlas-mlir's program limit changed: recheck K-loop unrolling "
               "(passes 2 and 4)");
-static_assert(kMxuUnits == 2,
-              "atlas-mlir's MXU count changed: recheck ttatlas.mxu and pass 4");
+static_assert(
+    kMxuUnits == 2,
+    "atlas-mlir's MXU count changed: recheck the matmul unit choice in pass 7");
 
 } // namespace mlir::ttatlas::target
 

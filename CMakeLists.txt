@@ -179,6 +179,7 @@ target_link_libraries(
         MLIRLinalgDialect
         MLIRLinalgTransforms
         MLIRTensorTilingInterfaceImpl
+        MLIRTensorInferTypeOpInterfaceImpl
 )
 
 # clangd finds compile_commands.json at the repo root with no settings. Triton's setup.py links it the same way.

@@ -61,10 +61,10 @@ tt.func @widen_rtz(%x: tensor<32x32xbf16>) -> tensor<32x32xf32> {
 
 // ttatlas tags on an arith op end up on the generic, not on the scalar op in its body.
 // CHECK-LABEL: tt.func @tags
-// CHECK: linalg.generic {{.*}} attrs = {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [32, 16]>}
-// CHECK-NOT: ttatlas.pad
+// CHECK: linalg.generic {{.*}} attrs = {ttatlas.fold_bias_into_dot = true}
+// CHECK-NOT: ttatlas.fold_bias_into_dot
 // CHECK: tt.return
 tt.func @tags(%x: tensor<32x32xf32>) -> tensor<32x32xf32> {
-  %r = arith.addf %x, %x {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [32, 16]>} : tensor<32x32xf32>
+  %r = arith.addf %x, %x {ttatlas.fold_bias_into_dot = true} : tensor<32x32xf32>
   tt.return %r : tensor<32x32xf32>
 }

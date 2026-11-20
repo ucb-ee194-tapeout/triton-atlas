@@ -32,7 +32,7 @@ struct FinalizeMachineHandoff
       return signalPassFailure();
 
     SmallVector<StringRef> obsolete = {kLayout, kDramBase, kFoldBiasIntoDot,
-                                       kPrecisionPolicy, kLegalized};
+                                       kPrecisionPolicy};
     bool invalid = false;
     module.walk([&](Operation *op) {
       if (op != module.getOperation() &&

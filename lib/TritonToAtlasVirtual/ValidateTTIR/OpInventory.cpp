@@ -1,5 +1,4 @@
-// Pass 1's op inventory (triton-atlas design agenda, page "Pass 1 ·
-// ttatlas-validate-ttir", section "Op inventory") as a ConversionTarget. Every
+// Pass 1's op inventory as a ConversionTarget. Every
 // op TTIR can contain is listed once: 175 ops, tt from Triton v3.9.0's
 // TritonOps.td; arith, math, scf, cf and ub from the LLVM Triton 3.9.0 builds
 // against (b010a18d); plus gpu.barrier, llvm.intr.assume and builtin.module.
@@ -45,15 +44,14 @@ struct Rejection {
 // Lowered as they are.
 void addLegal(ConversionTarget &target) {
   target.addLegalOp<ModuleOp, ReturnOp, MakeRangeOp, SplatOp, BroadcastOp,
-                    ExpandDimsOp, AddPtrOp, ReduceReturnOp, GetProgramIdOp,
-                    GetNumProgramsOp>();
+                    ExpandDimsOp, AddPtrOp, ReduceReturnOp, GetNumProgramsOp>();
   // unverified: math.exp and math.exp2 go to Atlas's exp table, whose
   // accuracy hasn't been checked on hardware.
   target.addLegalOp<arith::ConstantOp, arith::AddFOp, arith::SubFOp,
-                    arith::MulFOp, arith::MaxNumFOp, arith::MinNumFOp,
-                    arith::MaximumFOp, arith::MinimumFOp, arith::AddIOp,
-                    arith::SubIOp, arith::MulIOp, math::ExpOp, math::Exp2Op,
-                    scf::YieldOp>();
+                    arith::MulFOp, arith::DivFOp, arith::MaxNumFOp,
+                    arith::MinNumFOp, arith::MaximumFOp, arith::MinimumFOp,
+                    arith::AddIOp, arith::SubIOp, arith::MulIOp, math::ExpOp,
+                    math::Exp2Op, scf::YieldOp>();
   // Masks: pass 4 turns a mask with compile-time bounds into padding and
   // rejects any other (a runtime bound, a compare that isn't offs < N).
   target.addLegalOp<arith::CmpIOp, arith::AndIOp>();
@@ -66,8 +64,8 @@ void addConditionallyLegal(ConversionTarget &target) {
   };
   // unverified: tt.fp_to_fp's rounding mode isn't checked.
   target.addDynamicallyLegalOp<FuncOp, LoadOp, StoreOp, FpToFpOp, arith::ExtFOp,
-                               arith::TruncFOp, arith::DivFOp, ReduceOp,
-                               TransOp, ub::PoisonOp, scf::ForOp, DotOp>(holds);
+                               arith::TruncFOp, ReduceOp, TransOp, ub::PoisonOp,
+                               scf::ForOp, DotOp, GetProgramIdOp>(holds);
 }
 
 // Atlas has an equivalent, but no pass lowers it yet.
