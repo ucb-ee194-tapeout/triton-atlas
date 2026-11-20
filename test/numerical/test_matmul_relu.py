@@ -15,7 +15,7 @@ from reference import deterministic_inputs, f32_values_from_bf16, matmul_relu
 
 def check_case(output, atlas_bin, model_python, model_root, dram_base, inputs, expected,
                triton_atlas_opt=DEFAULT_TRITON_ATLAS_OPT):
-    from triton_atlas_backend.boundary import pack_input_tile, unpack_output_tile
+    from triton_atlas_backend.boundary import pack_input_tile
     sys.path.insert(0, str(ROOT / "third_party/atlas-mlir/python"))
     from atlas_mlir_native.layout import unpack_bf16_pair_halves
 
@@ -70,11 +70,12 @@ def check_case(output, atlas_bin, model_python, model_root, dram_base, inputs, e
     if len(memory) != len(initial):
         raise ValueError("model returned an incomplete memory image")
     physical = memory[offset:offset + 2048]
-    # DMA writes the two 32x16 BF16 register halves consecutively. Reuse
-    # Atlas's physical ABI conversion before our row-major crop/widen helper.
+    # DMA writes the two 32x16 BF16 register halves consecutively; atlas-mlir's
+    # layout helper turns them back into a row-major tile. The f32 host value is
+    # the BF16 bits widened with zero low bits. FP8 inputs are row-major on the
+    # device; a BF16 input would need the split-half order (pack_bf16_pair_halves).
     actual = unpack_bf16_pair_halves(physical)
-    host = bytearray(4096)
-    unpack_output_tile(actual, host, (32, 32), slot)
+    host = bytearray(b"".join(b"\0\0" + actual[i:i + 2] for i in range(0, 2048, 2)))
     values = list(struct.unpack("<1024f", host))
     reference = f32_values_from_bf16(expected)
     expected_host = b"".join(b"\0\0" + expected[i:i + 2] for i in range(0, 2048, 2))
