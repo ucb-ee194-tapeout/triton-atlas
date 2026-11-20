@@ -74,6 +74,14 @@ tests() {
     lit -sv "${@:-test}"
 }
 
+# The opt-in check on npu_model. Its results go in build/numerical, which the script wants new each run.
+numerical() {
+    [ -n "${NPU_MODEL_PYTHON:-}" ] && [ -n "${NPU_MODEL_ROOT:-}" ] || die "set NPU_MODEL_PYTHON and NPU_MODEL_ROOT in env.sh"
+    rm -rf build/numerical
+    python test/numerical/test_matmul_relu.py --out build/numerical \
+        --model-python "$NPU_MODEL_PYTHON" --model-root "$NPU_MODEL_ROOT"
+}
+
 # Build the server in folder $1 and link it where editors look.
 link_lsp() {
     cmake --build "$1" --target triton-atlas-lsp

@@ -152,6 +152,10 @@ build.wheel: build/plugin/build.ninja ## build the wheel to hand out, in build/d
 test: build.tools ## run the lit tests in test/; T=<file or folder> runs some
 	+scripts/build.sh tests $(T)
 
+.PHONY: test.numerical
+test.numerical: build.tools ## run matmul_relu on npu_model and compare every output (needs make setup.atlas.full)
+	scripts/build.sh numerical
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Format
 # ----------------------------------------------------------------------------------------------------------------------

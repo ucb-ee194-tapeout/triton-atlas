@@ -2,7 +2,8 @@
 
 Compiles the kernel, emits Atlas machine code with atlas-mlir, runs it on npu_model with RTL numerics, and compares
 all 1024 outputs bit for bit with reference.py (MXU0: BF16 accumulator rounded after every multiply-add, then ReLU).
-Needs the full atlas-mlir build (make setup.atlas.full) and a Python with torch that can import npu_model:
+Needs the full atlas-mlir build (make setup.atlas.full) and a Python with torch that can import npu_model. make
+test.numerical runs it with the npu_model settings in env.sh; by hand:
 
     python test/numerical/test_matmul_relu.py --out <new folder> --model-python <venv>/bin/python \
         --model-root <npu_model checkout>

@@ -21,3 +21,7 @@ export PATH="$PWD/build/bin:$PATH"
 
 # What the Atlas driver does: virtual (compile only) or npu (run on npu_model; not implemented yet).
 export TRITON_ATLAS_TARGET="${TRITON_ATLAS_TARGET:-virtual}"
+
+# For make test.numerical: an npu_model checkout, and a Python with torch that can import it.
+# export NPU_MODEL_ROOT=/path/to/npu_model
+# export NPU_MODEL_PYTHON=/path/to/venv/bin/python
