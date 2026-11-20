@@ -46,6 +46,7 @@ static void registerAtlasDialects(mlir::DialectRegistry *registry) {
 // output.
 static void registerAtlasPasses() {
   registerTritonToAtlasVirtualPasses();
+  mlir::ttatlas::registerFinalizeMachineHandoffPass();
   mlir::atlas::registerVerifyAtlasVirtualStreamPass();
   // The whole pipeline under one name, so tests (triton-atlas-opt
   // --ttatlas-pipeline) run exactly what Pipeline.cpp builds instead of a
