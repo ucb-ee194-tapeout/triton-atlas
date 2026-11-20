@@ -76,7 +76,9 @@ tests() {
 
 # The opt-in check on npu_model. Its results go in build/numerical, which the script wants new each run.
 numerical() {
-    [ -n "${NPU_MODEL_PYTHON:-}" ] && [ -n "${NPU_MODEL_ROOT:-}" ] || die "set NPU_MODEL_PYTHON and NPU_MODEL_ROOT in env.sh"
+    local problem
+    problem="$(npu_model_check)" || die "$problem"
+    [ -x build/bin/atlas-opt ] && [ -x build/bin/atlas-emit ] || die "no atlas-opt or atlas-emit; run make setup.atlas.full"
     rm -rf build/numerical
     python test/numerical/test_matmul_relu.py --out build/numerical \
         --model-python "$NPU_MODEL_PYTHON" --model-root "$NPU_MODEL_ROOT"
