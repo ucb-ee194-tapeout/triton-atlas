@@ -28,6 +28,10 @@ help: ## list these commands
 	@awk -F':.*## ' '/^[a-z.-]+:.*## /{d = gsub(/\./, ".", $$1); printf "  %*s%-*s %s\n", 2 * d, "", 20 - 2 * d, $$1, $$2}' \
 		$(lastword $(MAKEFILE_LIST))
 
+.PHONY: doctor
+doctor: ## print the setup in use and how to get what is missing
+	@scripts/setup.sh doctor
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Setup: what this repo depends on
 # ----------------------------------------------------------------------------------------------------------------------

@@ -126,6 +126,33 @@ report_tool() {
     [ -x "$LLVM_INSTALL_DIR/bin/$1" ] || echo "  missing  $1: $2"
 }
 
+# Print the setup in use, part by part, and how to get what is missing. Reports only, so a missing part isn't an error.
+doctor() {
+    echo "env.sh: target ${TRITON_ATLAS_TARGET:-unset}, compiler ${CXX:-default}"
+    (llvm_check) || true
+    if [ -x "$VIRTUAL_ENV/bin/python" ]; then
+        echo "venv: $(python --version) at $VIRTUAL_ENV"
+        python -c 'import importlib.metadata as m; print("  triton", m.version("triton") + ", plugin", m.version("triton-atlas-backend"))' 2>/dev/null ||
+            echo "  missing  triton or the plugin: run make"
+    else
+        echo "  missing  .venv: run make setup"
+    fi
+    report_file build/bin/triton-atlas-opt "run make"
+    report_file build/bin/atlas-opt "run make setup.atlas.full, for make test.numerical"
+    report_file build/bin/atlas-emit "run make setup.atlas.full, for make test.numerical"
+    report_file build/bin/triton-opt "optional: make setup.triton"
+    local problem
+    if problem="$(npu_model_check)"; then
+        echo "npu_model $(git -C "$NPU_MODEL_ROOT" rev-parse --short HEAD 2>/dev/null || echo "(not a git checkout)") at $NPU_MODEL_ROOT"
+    else
+        echo "  missing  npu_model: $problem"
+    fi
+}
+
+report_file() {
+    [ -x "$1" ] || echo "  missing  $(basename "$1"): $2"
+}
+
 # atlas-mlir's own build, as in its README, in its own folder. The plugin compiles only the library.
 atlas_full() {
     dev_tools

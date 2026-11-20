@@ -98,6 +98,7 @@ triton-atlas/
 | Build LLVM from source (`mlir-opt`, all tools) | `make setup.llvm.source` (22 min, 9 GB) |
 | Clean up | `make clean`; `make clean.<part>` for one part |
 | List every command | `make help` |
+| Check the setup | `make doctor` |
 
 To add a pass: declare it in its own file under `include/TritonToAtlasVirtual/Passes/` (included from `Passes.td`),
 write it in its own folder under `lib/TritonToAtlasVirtual/`, add it to `Pipeline.cpp`, and add a test folder
