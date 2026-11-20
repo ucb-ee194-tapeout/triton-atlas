@@ -23,5 +23,5 @@ config.environment["PATH"] = os.pathsep.join([
 config.substitutions.append(("%PYTHON", sys.executable))
 # atlas-tools: the full atlas-mlir build (make setup.atlas.full) is there, for tests that run atlas-opt and atlas-emit.
 _atlas_bin = os.environ.get("ATLAS_OOT_BIN_DIR", os.path.join(_repo, "build", "atlas", "bin"))
-if os.path.exists(os.path.join(_atlas_bin, "atlas-emit")):
+if all(os.path.exists(os.path.join(_atlas_bin, tool)) for tool in ("atlas-opt", "atlas-emit")):
     config.available_features.add("atlas-tools")
