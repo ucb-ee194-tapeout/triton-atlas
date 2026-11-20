@@ -1,7 +1,7 @@
 // RUN: triton-atlas-opt %s --split-input-file --ttatlas-validate-ttir | FileCheck %s
 
 // The accepted side of each condition on a legal op (the reject-*.mlir files test the other side). Each kernel
-// passes unchanged, apart from the host dtype tags on loads and stores.
+// passes unchanged.
 
 // Unused scalar arguments (Inductor passes sizes it doesn't read), an integer one used only by tl.assume, and an
 // f32 output (the driver converts Atlas's BF16).

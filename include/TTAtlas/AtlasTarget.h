@@ -47,8 +47,9 @@ inline constexpr int kMxuAccumulatorsPerUnit =
 // counting the delays that timing adds, although the IMEM holds 128 KiB
 // (include/Atlas/AtlasGeneratedArtifact.h:11-12, docs/host-launch.md:29). A
 // larger program fails in lowering (lib/AtlasVirtualToMachine.cpp:119) or
-// after timing (lib/AtlasGeneratedSchedule.cpp:34). Nothing uses it yet; a
-// check that bounds the unrolled program size should.
+// after timing (lib/AtlasGeneratedSchedule.cpp:34). Pass 2 warns when the
+// unrolled kernel's dots alone exceed it, and pass 7 rejects a kernel whose
+// lower-bound word count does.
 inline constexpr int64_t kProgramWords = mlir::atlas::kAtlasGeneratedWordLimit;
 
 // DMA buffers must lie in [kDramWindowBegin, kDramWindowEnd), aligned to one
