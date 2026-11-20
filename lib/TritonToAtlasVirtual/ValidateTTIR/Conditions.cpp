@@ -30,13 +30,6 @@ std::string printed(Type type) {
   return text;
 }
 
-// 1.0, as a constant or a splat of one.
-bool isOne(Value value) {
-  if (auto splat = value.getDefiningOp<SplatOp>())
-    value = splat.getSrc();
-  return matchPattern(value, m_OneFloat());
-}
-
 // Whether a value only feeds tl.assume: llvm.intr.assume directly, or the
 // arith.cmpi that builds its condition. The inventory drops the assume.
 bool onlyFeedsAssumes(Operation *op) {
@@ -52,7 +45,7 @@ bool onlyFeedsAssumes(Operation *op) {
 // - atlas-hw: vpu_splat takes its value as constant bits, so a float has no
 //   path into Atlas as data.
 // - An integer (a size, a stride, a loop bound) needs specialization first:
-//   the pass 1 page's subset has constant sizes and strides only, and no pass
+//   the supported subset has constant sizes and strides only, and no pass
 //   evaluates a runtime offset or trip count yet.
 LogicalResult checkFunc(FuncOp func, EmitFn emit) {
   for (BlockArgument arg : func.getArguments()) {
@@ -118,16 +111,9 @@ LogicalResult checkConversion(Operation *op, EmitFn emit) {
   return success();
 }
 
-LogicalResult checkDivF(arith::DivFOp divf, EmitFn emit) {
-  if (isOne(divf.getLhs()))
-    return success();
-  return fail(emit, "only 1 / x is accepted (Atlas's reciprocal table); "
-                    "x / y needs a rewrite that doesn't exist yet");
-}
-
 // Whether a tt.reduce's body is one combine Atlas's VPU reduces a row with:
 // add, max or min of the two block arguments, returned as is (atlas-hw:
-// virtual IR's row reductions, per the pass 1 page's op inventory).
+// virtual IR's row reductions, per the op inventory).
 bool isRowCombine(ReduceOp reduce) {
   Block &body = reduce.getCombineOp().front();
   if (body.getOperations().size() != 2)
@@ -210,6 +196,39 @@ LogicalResult checkFor(scf::ForOp loop, EmitFn emit) {
   return success();
 }
 
+// Whether every use of `op`'s results is address or mask math: integer
+// arithmetic, splat, broadcast, expand_dims, addptr, compare and, an assume or
+// a loop bound, ending in a load or store's pointer or mask. Pass 6 then says
+// why it can't evaluate a program id there.
+bool feedsAddressing(Operation *op) {
+  return llvm::all_of(op->getUses(), [](OpOperand &use) {
+    Operation *user = use.getOwner();
+    Value operand = use.get();
+    if (auto load = dyn_cast<LoadOp>(user))
+      return operand == load.getPtr() || operand == load.getMask();
+    if (auto store = dyn_cast<StoreOp>(user))
+      return operand == store.getPtr() || operand == store.getMask();
+    if (isa<LLVM::AssumeOp>(user))
+      return true;
+    // A loop bound is rejected by the loop's own condition.
+    if (auto loop = dyn_cast<scf::ForOp>(user))
+      return operand == loop.getLowerBound() ||
+             operand == loop.getUpperBound() || operand == loop.getStep();
+    if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::CmpIOp,
+            arith::AndIOp, SplatOp, BroadcastOp, ExpandDimsOp, AddPtrOp>(user))
+      return feedsAddressing(user);
+    return false;
+  });
+}
+
+// A program id is not an Atlas value, so it can only index memory (pass 6
+// rejects that for now); in compute it would only fail late, in pass 7.
+LogicalResult checkProgramId(GetProgramIdOp pid, EmitFn emit) {
+  if (feedsAddressing(pid))
+    return success();
+  return fail(emit, "compute that uses a program ID is not supported yet");
+}
+
 } // namespace
 
 LogicalResult checkConditions(Operation *op, EmitFn emit) {
@@ -222,9 +241,9 @@ LogicalResult checkConditions(Operation *op, EmitFn emit) {
             return checkConversion(conversion, emit);
           })
       .Case([&](DotOp dot) { return checkDot(dot, emit); })
-      .Case([&](arith::DivFOp divf) { return checkDivF(divf, emit); })
       .Case([&](ReduceOp reduce) { return checkReduce(reduce, emit); })
       .Case([&](TransOp trans) { return checkTrans(trans, emit); })
+      .Case([&](GetProgramIdOp pid) { return checkProgramId(pid, emit); })
       .Case([&](ub::PoisonOp poison) { return checkPoison(poison, emit); })
       .Case([&](scf::ForOp loop) { return checkFor(loop, emit); })
       .Default([](Operation *) { return success(); });

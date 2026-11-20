@@ -9,6 +9,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
 #include "TTAtlas/TTAtlasEnums.h.inc"
@@ -23,23 +24,10 @@ namespace mlir::ttatlas {
 // Explicit post-Atlas-lowering handoff; not part of the TTIR passes 1-7.
 void registerFinalizeMachineHandoffPass();
 
-// Tag names. Plain tags hold built-in attributes; slot, k_chain and pad hold
+// Tag names. Plain tags hold built-in attributes; slot and k_chain hold
 // the typed attributes above.
-inline constexpr llvm::StringLiteral kHostDtype =
-    "ttatlas.host_dtype"; // TypeAttr, on loads and stores (pass 1)
 inline constexpr llvm::StringLiteral kKChain =
     "ttatlas.k_chain"; // #ttatlas.k_chain, on tt.dot (pass 2, read by pass 3)
-inline constexpr llvm::StringLiteral kPad =
-    "ttatlas.pad"; // #ttatlas.pad, one per padded boundary tile, on its op, not
-                   // a constant (pass 4)
-inline constexpr llvm::StringLiteral kMaskApply =
-    "ttatlas.mask_apply"; // unit, on the linalg.mul / linalg.add that pass 4
-                          // puts before a reduction: its constant operand is
-                          // a constant mask tile (pass 4, read by 6 and 7)
-inline constexpr llvm::StringLiteral kMxu =
-    "ttatlas.mxu"; // i32 < target::kMxuUnits, on linalg.matmul (pass 4)
-inline constexpr llvm::StringLiteral kScale =
-    "ttatlas.scale"; // i32 target::kScaleCode{Min,Max}, on an FP8 pack (pass 5)
 inline constexpr llvm::StringLiteral kSlot =
     "ttatlas.slot"; // #ttatlas.slot, on direct tile loads/stores or boundary
                     // slices (pass 6)
@@ -53,13 +41,7 @@ inline constexpr llvm::StringLiteral kFoldBiasIntoDot =
     "ttatlas.fold_bias_into_dot"; // bool, on the module (backend option; pass
                                   // 2)
 inline constexpr llvm::StringLiteral kKernel =
-    "ttatlas.kernel"; // JSON string (schema v1), on the function (pass 7)
-// List of {pass, what, loc} entries, one per legalization a pass did (on the
-// module). Absent or empty means the kernel was native: it reached Atlas
-// without any rewrite. Pass 7 copies it into ttatlas.kernel's
-// "legalized" field.
-inline constexpr llvm::StringLiteral kLegalized = "ttatlas.legalized";
-
+    "ttatlas.kernel"; // JSON string (schema v2), on the function (pass 7)
 // Precision policies the passes know. Names are versioned, so changing what a
 // policy does means a new name.
 inline constexpr llvm::StringLiteral kPrecisionPolicies[] = {"fp8-bf16-v1"};
@@ -68,18 +50,6 @@ inline constexpr llvm::StringLiteral kPrecisionPolicies[] = {"fp8-bf16-v1"};
 // tests can match the text: "atlas: unsupported <op-name>: <reason>" at the
 // op's source location (the kernel's Python line).
 InFlightDiagnostic emitUnsupported(Operation *op, const llvm::Twine &reason);
-
-// Every pass that rewrites something only because the input wasn't in Atlas
-// form already (padding a mask, retyping f32, splitting a block) records it
-// here, so a kernel is native exactly when ttatlas.legalized stays empty.
-// Appends {pass, what, loc ("file:line:col")} to the enclosing module's
-// ttatlas.legalized, once per distinct entry. Call it only from a pass that
-// runs on the whole module (not one nested on functions, which may run in
-// parallel), and only after the rewrite has succeeded: the module attribute
-// isn't undone if a conversion rolls back. Not exercised by a test yet; the
-// first legalizing pass is its first caller.
-void recordLegalization(Operation *op, llvm::StringRef pass,
-                        const llvm::Twine &what);
 
 } // namespace mlir::ttatlas
 

@@ -1,5 +1,4 @@
-// Pass 2, ttatlas-normalize. Contract: triton-atlas design agenda, page
-// "Pass 2 · ttatlas-normalize". It unrolls every constant-trip scf.for, moves
+// Pass 2, ttatlas-normalize. It unrolls every constant-trip scf.for, moves
 // a dot's bias out to a separate add, so every dot starts from zero or from
 // the previous dot of its chain, and tags each chain's dots ttatlas.k_chain.
 #include "TritonToAtlasVirtual/Passes.h"

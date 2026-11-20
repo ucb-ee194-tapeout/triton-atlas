@@ -15,7 +15,6 @@ import os
 from pathlib import Path
 import struct
 import subprocess
-import sys
 import tempfile
 
 from compile_matmul_relu import DEFAULT_TRITON_ATLAS_OPT, ROOT, probe
@@ -24,9 +23,7 @@ from reference import deterministic_inputs, f32_values_from_bf16, matmul_relu
 
 def check_case(output, atlas_bin, model_python, model_root, dram_base, inputs, expected,
                triton_atlas_opt=DEFAULT_TRITON_ATLAS_OPT):
-    from triton_atlas_backend.boundary import pack_input_tile
-    sys.path.insert(0, str(ROOT / "third_party/atlas-mlir/python"))
-    from atlas_mlir_native.layout import unpack_bf16_pair_halves
+    from triton_atlas_backend.boundary import pack_input_tile, unpack_outputs
 
     output.mkdir()
     probe(output, atlas_bin, dram_base, triton_atlas_opt=triton_atlas_opt)
@@ -34,12 +31,12 @@ def check_case(output, atlas_bin, model_python, model_root, dram_base, inputs, e
     if (manifest["grid"] != [1, 1, 1] or len(manifest["inputs"]) != 2 or len(manifest["outputs"]) != 1):
         raise ValueError("expected the one-tile matmul_relu boundary")
     for slot in manifest["inputs"] + manifest["outputs"]:
-        if slot["layout"] != "row_major" or slot["logical_shape"] != [32, 32]:
-            raise ValueError("expected full row-major tiles")
+        if slot["valid"] != [0, 0, 32, 32] or slot["vector_layout"] != "none":
+            raise ValueError("expected full tiles")
     slot = manifest["outputs"][0]
-    if {(entry["arg"], entry["role"]) for entry in manifest["inputs"]} != {(0, "activation_fp8"), (1, "weight_fp8_kn")}:
-        raise ValueError("expected A activation and row-major B[K,N] weight slots")
-    if slot["arg"] != 2 or slot["role"] != "output_bf16" or slot["host_dtype"] != "f32":
+    if {entry["arg"] for entry in manifest["inputs"]} != {0, 1}:
+        raise ValueError("expected the A and B input slots")
+    if slot["arg"] != 2 or slot["tile_dtype"] != "bf16" or slot["host_dtype"] != "f32":
         raise ValueError("expected BF16 device output with f32 host dtype")
     program = json.loads((output / "kernel.program.json").read_text())
     matmuls = [row for row in program["instructions"] if row["operation"] == "atlas.mxu_matmul"]
@@ -57,7 +54,7 @@ def check_case(output, atlas_bin, model_python, model_root, dram_base, inputs, e
         if entry["arg"] not in (0, 1) or entry["host_dtype"] != "f8E4M3FN":
             raise ValueError("expected FP8 A/B input arguments")
         address = input_base + entry["index"] * 2048
-        packed = pack_input_tile(inputs[entry["arg"]], (32, 32), entry)
+        packed = pack_input_tile(entry, inputs[entry["arg"]])
         initial[address - base:address - base + len(packed)] = packed
         addresses.append(dict(arg=entry["arg"], address=address, bytes=len(packed)))
     output_address = output_base + slot["index"] * 2048
@@ -79,12 +76,11 @@ def check_case(output, atlas_bin, model_python, model_root, dram_base, inputs, e
     if len(memory) != len(initial):
         raise ValueError("model returned an incomplete memory image")
     physical = memory[offset:offset + 2048]
-    # DMA writes the two 32x16 BF16 register halves consecutively; atlas-mlir's
-    # layout helper turns them back into a row-major tile. The f32 host value is
-    # the BF16 bits widened with zero low bits. FP8 inputs are row-major on the
-    # device; a BF16 input would need the split-half order (pack_bf16_pair_halves).
-    actual = unpack_bf16_pair_halves(physical)
-    host = bytearray(b"".join(b"\0\0" + actual[i:i + 2] for i in range(0, 2048, 2)))
+    # The packer reads the BF16 slot from DMA's split-half byte order and widens it to the f32 host tensor.
+    host = bytearray(4096)
+    unpack_outputs(manifest, memory[output_base - base:output_base - base + 2048 * len(manifest["outputs"])],
+                   {slot["arg"]: host})
+    actual = b"".join(host[i + 2:i + 4] for i in range(0, 4096, 4))
     values = list(struct.unpack("<1024f", host))
     reference = f32_values_from_bf16(expected)
     expected_host = b"".join(b"\0\0" + expected[i:i + 2] for i in range(0, 2048, 2))
@@ -103,9 +99,8 @@ def check_case(output, atlas_bin, model_python, model_root, dram_base, inputs, e
     errors = [abs(a - b) if math.isfinite(a) else math.inf for a, b in zip(values, reference)]
     report = dict(kernel="matmul_relu", arithmetic="MXU0 K-ordered BF16 RNE per MAC, then ReLU", inputs=addresses,
                   output_address=output_address, device_dtype="bf16", host_dtype="f32",
-                  physical_layout="bf16_pair_halves", exact_matches=1024 - len(mismatches), max_abs_error=max(errors),
-                  mismatches=mismatches, guard_mismatches=guard_mismatches, model=json.loads(
-                      (output / "model-stats.json").read_text()))
+                  exact_matches=1024 - len(mismatches), max_abs_error=max(errors), mismatches=mismatches,
+                  guard_mismatches=guard_mismatches, model=json.loads((output / "model-stats.json").read_text()))
     (output / "expected.bf16").write_bytes(expected)
     (output / "actual.physical.bf16").write_bytes(physical)
     (output / "actual.bf16").write_bytes(actual)

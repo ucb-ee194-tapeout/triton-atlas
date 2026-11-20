@@ -11,6 +11,7 @@
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/TensorInferTypeOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/IR/TensorTilingInterfaceImpl.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassManager.h"
@@ -39,6 +40,8 @@ static void registerAtlasDialects(mlir::DialectRegistry *registry) {
   // inside Triton's own process, so a kernel larger than one tile fails there.
   mlir::linalg::registerTilingInterfaceExternalModels(*registry);
   mlir::tensor::registerTilingInterfaceExternalModels(*registry);
+  // Unit-dimension folding (pass 4) reifies tensor result shapes.
+  mlir::tensor::registerInferTypeOpInterfaceExternalModels(*registry);
 }
 
 // Our passes, plus atlas-mlir's check that its virtual IR is well formed, so
@@ -48,6 +51,10 @@ static void registerAtlasPasses() {
   registerTritonToAtlasVirtualPasses();
   mlir::ttatlas::registerFinalizeMachineHandoffPass();
   mlir::atlas::registerVerifyAtlasVirtualStreamPass();
+  static mlir::PassPipelineRegistration<> legalizeShapes(
+      "ttatlas-legalize-shapes",
+      "Pass 4: pack, fold, tile the block grid, fold unit dimensions",
+      [](mlir::OpPassManager &pm) { buildLegalizeShapesPipeline(pm); });
   // The whole pipeline under one name, so tests (triton-atlas-opt
   // --ttatlas-pipeline) run exactly what Pipeline.cpp builds instead of a
   // copied pass list.

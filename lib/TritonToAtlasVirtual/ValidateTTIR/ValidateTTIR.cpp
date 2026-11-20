@@ -1,6 +1,4 @@
-// Pass 1, ttatlas-validate-ttir. Contract: triton-atlas design agenda, page
-// "Pass 1 · ttatlas-validate-ttir". It stops what no later pass lowers yet and
-// records each load's and store's host dtype.
+// Pass 1, ttatlas-validate-ttir. It stops what no later pass lowers yet.
 //
 // The op inventory is a ConversionTarget (OpInventory.cpp), with conditions on
 // some legal ops (Conditions.cpp). applyPartialConversion checks it: the first
@@ -50,17 +48,6 @@ struct RejectUnsupported : ConversionPattern {
   std::shared_ptr<const Reasons> reasons;
 };
 
-// Recorded now because pass 5 retypes values; the driver reads it to convert
-// at the boundary (e.g. an f32 output Atlas writes as BF16).
-void recordHostDtypes(ModuleOp module) {
-  module.walk([](LoadOp load) {
-    load->setAttr(tta::kHostDtype, TypeAttr::get(pointee(load.getPtr())));
-  });
-  module.walk([](StoreOp store) {
-    store->setAttr(tta::kHostDtype, TypeAttr::get(pointee(store.getPtr())));
-  });
-}
-
 struct ValidateTTIR : impl::ValidateTTIRBase<ValidateTTIR> {
   // Builds the target and the patterns once per pass instance.
   LogicalResult initialize(MLIRContext *ctx) override {
@@ -82,7 +69,6 @@ struct ValidateTTIR : impl::ValidateTTIRBase<ValidateTTIR> {
     if (failed(
             applyPartialConversion(getOperation(), *target, patterns, config)))
       return signalPassFailure();
-    recordHostDtypes(getOperation());
   }
 
   // Shared by the clones the pass manager makes for each thread; read only.

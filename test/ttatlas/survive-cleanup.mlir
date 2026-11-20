@@ -7,22 +7,22 @@
 #o = affine_map<()[s0, s1, s2, s3, s4, s5] -> (0, 0)>
 tt.func @k(%p: !tt.ptr<f8E4M3FN>, %q: !tt.ptr<bf16>) {
   %s = tt.splat %p : !tt.ptr<f8E4M3FN> -> tensor<32x32x!tt.ptr<f8E4M3FN>>
-  // CHECK: tt.load {{.*}}ttatlas.host_dtype = f8E4M3FN, ttatlas.slot = #ttatlas.slot<index = 0
-  %a = tt.load %s {ttatlas.host_dtype = f8E4M3FN, ttatlas.slot = #ttatlas.slot<index = 0, arg = 0, role = activation_fp8, tile_origin = #o, logical_shape = [32, 32], host_dtype = f8E4M3FN>} : tensor<32x32x!tt.ptr<f8E4M3FN>>
+  // CHECK: tt.load {{.*}}ttatlas.slot = #ttatlas.slot<index = 0
+  %a = tt.load %s {ttatlas.slot = #ttatlas.slot<index = 0, kind = memory, arg = 0, role = activation_fp8, offset = 0, row_stride = 32, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], vector_layout = none, transposed = false, host_dtype = f8E4M3FN, tile_dtype = f8E4M3FN>} : tensor<32x32x!tt.ptr<f8E4M3FN>>
   // CHECK: tt.load {{.*}}ttatlas.slot = #ttatlas.slot<index = 1
-  %b = tt.load %s {ttatlas.host_dtype = f8E4M3FN, ttatlas.slot = #ttatlas.slot<index = 1, arg = 0, role = weight_fp8_kn, tile_origin = #o, logical_shape = [32, 32], host_dtype = f8E4M3FN>} : tensor<32x32x!tt.ptr<f8E4M3FN>>
+  %b = tt.load %s {ttatlas.slot = #ttatlas.slot<index = 1, kind = memory, arg = 0, role = weight_fp8_kn, offset = 0, row_stride = 32, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], vector_layout = none, transposed = false, host_dtype = f8E4M3FN, tile_dtype = f8E4M3FN>} : tensor<32x32x!tt.ptr<f8E4M3FN>>
   // Identical to %b, tags included: CSE may merge it into %b, which gives one slot.
-  %b2 = tt.load %s {ttatlas.host_dtype = f8E4M3FN, ttatlas.slot = #ttatlas.slot<index = 1, arg = 0, role = weight_fp8_kn, tile_origin = #o, logical_shape = [32, 32], host_dtype = f8E4M3FN>} : tensor<32x32x!tt.ptr<f8E4M3FN>>
+  %b2 = tt.load %s {ttatlas.slot = #ttatlas.slot<index = 1, kind = memory, arg = 0, role = weight_fp8_kn, offset = 0, row_stride = 32, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], vector_layout = none, transposed = false, host_dtype = f8E4M3FN, tile_dtype = f8E4M3FN>} : tensor<32x32x!tt.ptr<f8E4M3FN>>
   // CHECK-NOT: tt.load
   %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
-  // CHECK: tt.dot {{.*}}ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 0, len = 2>, ttatlas.mxu = 0 : i32
-  %d0 = tt.dot %a, %b, %zero {ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 0, len = 2>, ttatlas.mxu = 0 : i32} : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
-  // CHECK: tt.dot {{.*}}ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 2>, ttatlas.mxu = 0 : i32
-  %d1 = tt.dot %a, %b2, %d0 {ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 2>, ttatlas.mxu = 0 : i32} : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
+  // CHECK: tt.dot {{.*}}ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 0, len = 2>
+  %d0 = tt.dot %a, %b, %zero {ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 0, len = 2>} : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
+  // CHECK: tt.dot {{.*}}ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 2>
+  %d1 = tt.dot %a, %b2, %d0 {ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 2>} : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
   %o16 = arith.truncf %d1 : tensor<32x32xf32> to tensor<32x32xbf16>
   %t = tt.splat %q : !tt.ptr<bf16> -> tensor<32x32x!tt.ptr<bf16>>
-  // CHECK: tt.store {{.*}}ttatlas.host_dtype = f32, ttatlas.slot = #ttatlas.slot<index = 0, arg = 1, role = output_bf16
-  tt.store %t, %o16 {ttatlas.host_dtype = f32, ttatlas.slot = #ttatlas.slot<index = 0, arg = 1, role = output_bf16, tile_origin = #o, logical_shape = [32, 32], host_dtype = f32>} : tensor<32x32x!tt.ptr<bf16>>
+  // CHECK: tt.store {{.*}}ttatlas.slot = #ttatlas.slot<index = 0, kind = memory, arg = 1, role = output_bf16
+  tt.store %t, %o16 {ttatlas.slot = #ttatlas.slot<index = 0, kind = memory, arg = 1, role = output_bf16, offset = 0, row_stride = 32, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], vector_layout = none, transposed = false, host_dtype = f32, tile_dtype = bf16>} : tensor<32x32x!tt.ptr<bf16>>
   tt.return
 }
 
@@ -31,9 +31,9 @@ func.func @tiled(%a: tensor<32x32xf8E4M3FN>, %b: tensor<32x32xf8E4M3FN>) -> tens
   %zero = arith.constant 0.000000e+00 : f32
   %empty = tensor.empty() : tensor<32x32xf32>
   %acc = linalg.fill ins(%zero : f32) outs(%empty : tensor<32x32xf32>) -> tensor<32x32xf32>
-  // CHECK: linalg.matmul {ttatlas.mxu = 0 : i32}
-  %m0 = linalg.matmul {ttatlas.mxu = 0 : i32} ins(%a, %b : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
-  // CHECK: linalg.matmul {ttatlas.mxu = 0 : i32}
-  %m1 = linalg.matmul {ttatlas.mxu = 0 : i32} ins(%a, %b : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%m0 : tensor<32x32xf32>) -> tensor<32x32xf32>
+  // CHECK: linalg.matmul {ttatlas.fold_bias_into_dot = true}
+  %m0 = linalg.matmul {ttatlas.fold_bias_into_dot = true} ins(%a, %b : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+  // CHECK: linalg.matmul {ttatlas.fold_bias_into_dot = true}
+  %m1 = linalg.matmul {ttatlas.fold_bias_into_dot = true} ins(%a, %b : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%m0 : tensor<32x32xf32>) -> tensor<32x32xf32>
   return %m1 : tensor<32x32xf32>
 }

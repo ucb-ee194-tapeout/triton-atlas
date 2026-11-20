@@ -1,24 +1,29 @@
 // RUN: triton-atlas-opt %s --split-input-file --verify-diagnostics --ttatlas-verify-contract=stage=4
 
-// Pass 4's contract: every linalg value is one tile (32 or 32x32); every linalg.matmul carries ttatlas.mxu; every
-// linalg.fill writes a fresh tile-sized tensor.empty; a larger tt.load is read only through constant tile slices, and
-// a larger stored tensor is built only from constant tile insert_slices over a tensor.empty, one per tile. A load or
-// store that is not whole tiles has one more form each: a load read only by a tensor.pad up to whole tiles (one tagged
-// pad up to a tile, or a pad read through tile slices), and a stored constant crop, from the origin, of a tile or of a
-// tensor built from tiles.
+// Pass 4's contract: compute is linalg on single tiles (32 or 32x32); the memory boundary is one linalg.pack of each
+// tt.load (through float casts) and one linalg.unpack read only by a tt.store (through float casts); no tile loop is left. A kernel with no compute keeps its tt.load feeding its
+// tt.store.
 
 tt.func @ok(%in: tensor<64x64x!tt.ptr<bf16>>, %out: tensor<64x64x!tt.ptr<bf16>>) {
   %x = tt.load %in : tensor<64x64x!tt.ptr<bf16>>
-  %t00 = tensor.extract_slice %x[0, 0] [32, 32] [1, 1] : tensor<64x64xbf16> to tensor<32x32xbf16>
-  %t01 = tensor.extract_slice %x[0, 32] [32, 32] [1, 1] : tensor<64x64xbf16> to tensor<32x32xbf16>
-  %e = tensor.empty() : tensor<32x32xbf16>
-  %s = linalg.add ins(%t00, %t01 : tensor<32x32xbf16>, tensor<32x32xbf16>) outs(%e : tensor<32x32xbf16>) -> tensor<32x32xbf16>
-  %big = tensor.empty() : tensor<64x64xbf16>
-  %y0 = tensor.insert_slice %s into %big[0, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y1 = tensor.insert_slice %s into %y0[0, 32] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y2 = tensor.insert_slice %s into %y1[32, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y3 = tensor.insert_slice %s into %y2[32, 32] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  tt.store %out, %y3 : tensor<64x64x!tt.ptr<bf16>>
+  %e = tensor.empty() : tensor<2x2x32x32xbf16>
+  %p = linalg.pack %x inner_dims_pos = [0, 1] inner_tiles = [32, 32] into %e : tensor<64x64xbf16> -> tensor<2x2x32x32xbf16>
+  %t = tensor.extract_slice %p[0, 0, 0, 0] [1, 1, 32, 32] [1, 1, 1, 1] : tensor<2x2x32x32xbf16> to tensor<32x32xbf16>
+  %c = tensor.empty() : tensor<32x32xbf16>
+  %s = linalg.add ins(%t, %t : tensor<32x32xbf16>, tensor<32x32xbf16>) outs(%c : tensor<32x32xbf16>) -> tensor<32x32xbf16>
+  %big = tensor.insert_slice %s into %p[0, 0, 0, 0] [1, 1, 32, 32] [1, 1, 1, 1] : tensor<32x32xbf16> into tensor<2x2x32x32xbf16>
+  %o = tensor.empty() : tensor<64x64xbf16>
+  %u = linalg.unpack %big inner_dims_pos = [0, 1] inner_tiles = [32, 32] into %o : tensor<2x2x32x32xbf16> -> tensor<64x64xbf16>
+  tt.store %out, %u : tensor<64x64x!tt.ptr<bf16>>
+  tt.return
+}
+
+// -----
+
+// A plain copy has no compute, so it keeps its load and store.
+tt.func @copy(%in: tensor<64x64x!tt.ptr<bf16>>, %out: tensor<64x64x!tt.ptr<bf16>>) {
+  %x = tt.load %in : tensor<64x64x!tt.ptr<bf16>>
+  tt.store %out, %x : tensor<64x64x!tt.ptr<bf16>>
   tt.return
 }
 
@@ -33,196 +38,52 @@ tt.func @big_linalg(%x: tensor<64x64xbf16>) {
 
 // -----
 
-tt.func @no_unit(%a: tensor<32x32xf8E4M3FN>, %acc: tensor<32x32xf32>) {
-  // expected-error @below {{contract of pass 4 broken: linalg.matmul without ttatlas.mxu}}
-  %m = linalg.matmul ins(%a, %a : tensor<32x32xf8E4M3FN>, tensor<32x32xf8E4M3FN>) outs(%acc : tensor<32x32xf32>) -> tensor<32x32xf32>
+// An unpack read by compute: the pair was not folded.
+tt.func @unfolded_pair(%in: tensor<32x32x!tt.ptr<bf16>>) {
+  %x = tt.load %in : tensor<32x32x!tt.ptr<bf16>>
+  %e = tensor.empty() : tensor<1x1x32x32xbf16>
+  %p = linalg.pack %x inner_dims_pos = [0, 1] inner_tiles = [32, 32] into %e : tensor<32x32xbf16> -> tensor<1x1x32x32xbf16>
+  %o = tensor.empty() : tensor<32x32xbf16>
+  // expected-error @below {{contract of pass 4 broken: linalg.unpack read by something other than a tt.store}}
+  %u = linalg.unpack %p inner_dims_pos = [0, 1] inner_tiles = [32, 32] into %o : tensor<1x1x32x32xbf16> -> tensor<32x32xbf16>
+  %e2 = tensor.empty() : tensor<1x1x32x32xbf16>
+  // expected-error @below {{contract of pass 4 broken: linalg.pack of something other than a tt.load}}
+  %p2 = linalg.pack %u inner_dims_pos = [0, 1] inner_tiles = [32, 32] into %e2 : tensor<32x32xbf16> -> tensor<1x1x32x32xbf16>
   tt.return
 }
 
 // -----
 
-// A 64x64 load used whole, not through 32x32 slices.
-tt.func @load_used_whole(%in: tensor<64x64x!tt.ptr<bf16>>, %out: tensor<64x64x!tt.ptr<bf16>>) {
-  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
-  %x = tt.load %in : tensor<64x64x!tt.ptr<bf16>>
-  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
-  tt.store %out, %x : tensor<64x64x!tt.ptr<bf16>>
+// A pack of a constant or an empty tensor was not folded.
+tt.func @pack_of_constant() {
+  %c = arith.constant dense<0.0> : tensor<32x32xbf16>
+  %e = tensor.empty() : tensor<1x1x32x32xbf16>
+  // expected-error @below {{contract of pass 4 broken: linalg.pack of something other than a tt.load}}
+  %p = linalg.pack %c inner_dims_pos = [0, 1] inner_tiles = [32, 32] into %e : tensor<32x32xbf16> -> tensor<1x1x32x32xbf16>
   tt.return
 }
 
 // -----
 
-// A 64x64 store of a value that is not assembled from 32x32 tiles.
-tt.func @store_not_tiled(%out: tensor<64x64x!tt.ptr<bf16>>, %y: tensor<64x64xbf16>) {
-  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
-  tt.store %out, %y : tensor<64x64x!tt.ptr<bf16>>
-  tt.return
-}
-
-// -----
-
-// Three tiles of four: the stored tensor is not covered.
-tt.func @store_missing_tile(%out: tensor<64x64x!tt.ptr<bf16>>, %t: tensor<32x32xbf16>) {
-  %big = tensor.empty() : tensor<64x64xbf16>
-  %y0 = tensor.insert_slice %t into %big[0, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y1 = tensor.insert_slice %t into %y0[0, 32] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y2 = tensor.insert_slice %t into %y1[32, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
-  tt.store %out, %y2 : tensor<64x64x!tt.ptr<bf16>>
-  tt.return
-}
-
-// -----
-
-// A load read through a slice that is not one 32x32 tile.
-tt.func @load_bad_slice(%in: tensor<64x64x!tt.ptr<bf16>>) {
-  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
-  %x = tt.load %in : tensor<64x64x!tt.ptr<bf16>>
-  %t = tensor.extract_slice %x[0, 0] [32, 64] [1, 1] : tensor<64x64xbf16> to tensor<32x64xbf16>
-  tt.return
-}
-
-// -----
-
-// A slice at a runtime offset (what tiling leaves before its loop is unrolled).
-tt.func @load_dynamic_offset(%in: tensor<64x64x!tt.ptr<bf16>>, %i: index) {
-  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
-  %x = tt.load %in : tensor<64x64x!tt.ptr<bf16>>
-  %t = tensor.extract_slice %x[%i, 0] [32, 32] [1, 1] : tensor<64x64xbf16> to tensor<32x32xbf16>
-  tt.return
-}
-
-// -----
-
-tt.func @load_strided(%in: tensor<64x64x!tt.ptr<bf16>>) {
-  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
-  %x = tt.load %in : tensor<64x64x!tt.ptr<bf16>>
-  %t = tensor.extract_slice %x[0, 0] [32, 32] [2, 2] : tensor<64x64xbf16> to tensor<32x32xbf16>
-  tt.return
-}
-
-// -----
-
-// Four tiles, one at row 16: not aligned to the tile grid.
-tt.func @store_misaligned(%out: tensor<64x64x!tt.ptr<bf16>>, %t: tensor<32x32xbf16>) {
-  %big = tensor.empty() : tensor<64x64xbf16>
-  %y0 = tensor.insert_slice %t into %big[0, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y1 = tensor.insert_slice %t into %y0[0, 32] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y2 = tensor.insert_slice %t into %y1[16, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y3 = tensor.insert_slice %t into %y2[32, 32] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
-  tt.store %out, %y3 : tensor<64x64x!tt.ptr<bf16>>
-  tt.return
-}
-
-// -----
-
-// Five inserts covering four tiles: one tile is written twice.
-tt.func @store_duplicate(%out: tensor<64x64x!tt.ptr<bf16>>, %t: tensor<32x32xbf16>) {
-  %big = tensor.empty() : tensor<64x64xbf16>
-  %y0 = tensor.insert_slice %t into %big[0, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y1 = tensor.insert_slice %t into %y0[0, 32] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y2 = tensor.insert_slice %t into %y1[32, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y3 = tensor.insert_slice %t into %y2[32, 32] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  %y4 = tensor.insert_slice %t into %y3[0, 0] [32, 32] [1, 1] : tensor<32x32xbf16> into tensor<64x64xbf16>
-  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
-  tt.store %out, %y4 : tensor<64x64x!tt.ptr<bf16>>
-  tt.return
-}
-
-// -----
-
-// What tiling leaves before fold-tensor-empty: a fill into a slice of one big empty.
-tt.func @fill_into_slice() {
-  %zero = arith.constant 0.000000e+00 : f32
-  %big = tensor.empty() : tensor<64x64xf32>
-  %s = tensor.extract_slice %big[0, 0] [32, 32] [1, 1] : tensor<64x64xf32> to tensor<32x32xf32>
-  // expected-error @below {{contract of pass 4 broken: linalg.fill does not write a fresh tensor.empty tile}}
-  %acc = linalg.fill ins(%zero : f32) outs(%s : tensor<32x32xf32>) -> tensor<32x32xf32>
-  tt.return
-}
-
-// -----
-
-// 1-D values count too: a 64-long bias load read through a 48-long slice.
-tt.func @load_1d_bad_slice(%in: tensor<64x!tt.ptr<bf16>>, %out: tensor<64x!tt.ptr<bf16>>) {
-  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
-  %x = tt.load %in : tensor<64x!tt.ptr<bf16>>
-  %h = tensor.extract_slice %x[0] [32] [1] : tensor<64xbf16> to tensor<32xbf16>
-  %w = tensor.extract_slice %x[16] [48] [1] : tensor<64xbf16> to tensor<48xbf16>
-  tt.return
-}
-
-// -----
-
-tt.func @linalg_1d_large(%x: tensor<64xbf16>) {
-  %e = tensor.empty() : tensor<64xbf16>
-  // expected-error @below {{contract of pass 4 broken: linalg value is not one tile (32 or 32x32)}}
-  %s = linalg.add ins(%x, %x : tensor<64xbf16>, tensor<64xbf16>) outs(%e : tensor<64xbf16>) -> tensor<64xbf16>
-  tt.return
-}
-
-// -----
-
-// A 16x16 load padded to one tagged tile, a 64x16 load padded to two tiles read through slices (the pad needs no tag
-// then: each padded tile's slice has one), and a 16x16 crop of a tile stored.
-tt.func @padded_load_and_cropped_store(%in: tensor<16x16x!tt.ptr<bf16>>, %in2: tensor<64x16x!tt.ptr<bf16>>, %out: tensor<16x16x!tt.ptr<bf16>>) {
-  %z = arith.constant 0.0 : bf16
-  %x = tt.load %in : tensor<16x16x!tt.ptr<bf16>>
-  %p = tensor.pad %x low[0, 0] high[16, 16] {
-  ^bb0(%i: index, %j: index):
-    tensor.yield %z : bf16
-  } {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 16]>} : tensor<16x16xbf16> to tensor<32x32xbf16>
-  %x2 = tt.load %in2 : tensor<64x16x!tt.ptr<bf16>>
-  %p2 = tensor.pad %x2 low[0, 0] high[0, 16] {
-  ^bb0(%i: index, %j: index):
-    tensor.yield %z : bf16
-  } : tensor<64x16xbf16> to tensor<64x32xbf16>
-  %t0 = tensor.extract_slice %p2[0, 0] [32, 32] [1, 1] : tensor<64x32xbf16> to tensor<32x32xbf16>
-  %t1 = tensor.extract_slice %p2[32, 0] [32, 32] [1, 1] : tensor<64x32xbf16> to tensor<32x32xbf16>
+// A load read by compute directly, with no pack.
+tt.func @load_unpacked(%in: tensor<32x32x!tt.ptr<bf16>>) {
+  // expected-error @below {{contract of pass 4 broken: tt.load read by something other than a linalg.pack}}
+  %x = tt.load %in : tensor<32x32x!tt.ptr<bf16>>
   %e = tensor.empty() : tensor<32x32xbf16>
-  %s = linalg.add ins(%p, %t0 : tensor<32x32xbf16>, tensor<32x32xbf16>) outs(%e : tensor<32x32xbf16>) -> tensor<32x32xbf16>
-  %c = tensor.extract_slice %s[0, 0] [16, 16] [1, 1] : tensor<32x32xbf16> to tensor<16x16xbf16>
-  tt.store %out, %c : tensor<16x16x!tt.ptr<bf16>>
+  %s = linalg.add ins(%x, %x : tensor<32x32xbf16>, tensor<32x32xbf16>) outs(%e : tensor<32x32xbf16>) -> tensor<32x32xbf16>
   tt.return
 }
 
 // -----
 
-// A padded one-tile load whose pad has no tag: the host would not know what to fill.
-tt.func @padded_load_untagged(%in: tensor<16x16x!tt.ptr<bf16>>) {
-  %z = arith.constant 0.0 : bf16
-  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
-  %x = tt.load %in : tensor<16x16x!tt.ptr<bf16>>
-  %p = tensor.pad %x low[0, 0] high[16, 16] {
-  ^bb0(%i: index, %j: index):
-    tensor.yield %z : bf16
-  } : tensor<16x16xbf16> to tensor<32x32xbf16>
-  tt.return
-}
-
-// -----
-
-// A padded load that something else also reads.
-tt.func @padded_load_also_read_whole(%in: tensor<16x16x!tt.ptr<bf16>>, %out: tensor<16x16x!tt.ptr<bf16>>) {
-  %z = arith.constant 0.0 : bf16
-  // expected-error @below {{contract of pass 4 broken: tt.load is read other than through constant tile slices}}
-  %x = tt.load %in : tensor<16x16x!tt.ptr<bf16>>
-  %p = tensor.pad %x low[0, 0] high[16, 16] {
-  ^bb0(%i: index, %j: index):
-    tensor.yield %z : bf16
-  } {ttatlas.pad = #ttatlas.pad<neutral = zero, logical_shape = [16, 16]>} : tensor<16x16xbf16> to tensor<32x32xbf16>
-  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
-  tt.store %out, %x : tensor<16x16x!tt.ptr<bf16>>
-  tt.return
-}
-
-// -----
-
-// A 16x16 crop that leaves a whole tile of its 64x64 source out.
-tt.func @crop_drops_tiles(%out: tensor<16x16x!tt.ptr<bf16>>, %big: tensor<64x64xbf16>) {
-  %c = tensor.extract_slice %big[0, 0] [16, 16] [1, 1] : tensor<64x64xbf16> to tensor<16x16xbf16>
-  // expected-error @below {{contract of pass 4 broken: stored tensor is not built from constant tile insert_slices}}
-  tt.store %out, %c : tensor<16x16x!tt.ptr<bf16>>
+// A tile loop left by tiling (no unroll).
+tt.func @loop_left(%x: tensor<32x32xbf16>) {
+  %lo = arith.constant 0 : index
+  %hi = arith.constant 2 : index
+  %one = arith.constant 1 : index
+  // expected-error @below {{contract of pass 4 broken: tile loop left}}
+  %r = scf.for %i = %lo to %hi step %one iter_args(%a = %x) -> tensor<32x32xbf16> {
+    scf.yield %a : tensor<32x32xbf16>
+  }
   tt.return
 }

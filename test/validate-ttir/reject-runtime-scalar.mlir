@@ -26,3 +26,15 @@ tt.func @stride(%p: !tt.ptr<bf16>, %stride: i32) {
   %x = tt.load %a : tensor<32x!tt.ptr<bf16>>
   tt.return
 }
+
+// -----
+
+// A program id used as data (tl.program_id(0) added to a tile). It may only index memory, which pass 6 judges.
+tt.func @pid_as_data(%x: tensor<32x32xi32>) -> tensor<32x32xi32> {
+  // expected-error @below {{atlas: unsupported tt.get_program_id: compute that uses a program ID is not supported yet}}
+  // expected-error @below {{failed to legalize operation 'tt.get_program_id' that was explicitly marked illegal}}
+  %pid = tt.get_program_id x : i32
+  %b = tt.splat %pid : i32 -> tensor<32x32xi32>
+  %r = arith.addi %x, %b : tensor<32x32xi32>
+  tt.return %r : tensor<32x32xi32>
+}

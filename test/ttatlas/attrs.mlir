@@ -1,24 +1,26 @@
 // RUN: triton-atlas-opt %s | triton-atlas-opt | FileCheck %s
 
-// Every ttatlas tag parses, verifies and prints back unchanged (encodings: triton-atlas design agenda,
-// "Frozen encodings (v1)").
+// Every ttatlas tag parses, verifies and prints back unchanged.
 
-// CHECK: #map = affine_map<()[s0, s1, s2, s3, s4, s5] -> (s0 * 32, 0)>
-// CHECK: module attributes {ttatlas.dram_base = 2415919104 : i64, ttatlas.layout = #ttatlas<layout tile_major>, ttatlas.legalized = [{loc = "softmax.py:14:5", pass = "ttatlas-legalize-shapes", what = "mask -> padding"}], ttatlas.precision_policy = "fp8-bf16-v1"}
-module attributes {ttatlas.dram_base = 2415919104 : i64, ttatlas.layout = #ttatlas<layout tile_major>, ttatlas.legalized = [{loc = "softmax.py:14:5", pass = "ttatlas-legalize-shapes", what = "mask -> padding"}], ttatlas.precision_policy = "fp8-bf16-v1"} {
-  // CHECK: func.func @tags() attributes {ttatlas.kernel = "{\22version\22: 1}"}
-  func.func @tags() attributes {ttatlas.kernel = "{\22version\22: 1}"} {
-    // CHECK: ttatlas.host_dtype = f8E4M3FN
-    // CHECK-SAME: ttatlas.slot = #ttatlas.slot<index = 0, arg = 1, role = weight_fp8_kn, tile_origin = #map, logical_shape = [32, 32], host_dtype = f8E4M3FN>
-    %a = tt.get_program_id x {ttatlas.host_dtype = f8E4M3FN, ttatlas.slot = #ttatlas.slot<index = 0, arg = 1, role = weight_fp8_kn, tile_origin = affine_map<()[s0, s1, s2, s3, s4, s5] -> (s0 * 32, 0)>, logical_shape = [32, 32], host_dtype = f8E4M3FN>} : i32
-    // CHECK: ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 4>, ttatlas.mxu = 0 : i32
-    %b = tt.get_program_id x {ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 4>, ttatlas.mxu = 0 : i32} : i32
-    // CHECK: ttatlas.pad = #ttatlas.pad<neutral = neg_inf, logical_shape = [32, 20]>, ttatlas.scale = 127 : i32
-    %c = tt.get_program_id x {ttatlas.pad = #ttatlas.pad<neutral = neg_inf, logical_shape = [32, 20]>, ttatlas.scale = 127 : i32} : i32
-    // CHECK: ttatlas.pad = #ttatlas.pad<neutral = one, logical_shape = [32, 20]>
-    %d = tt.get_program_id x {ttatlas.pad = #ttatlas.pad<neutral = one, logical_shape = [32, 20]>} : i32
-    // CHECK: ttatlas.pad = #ttatlas.pad<neutral = pos_inf, logical_shape = [32, 20]>
-    %e = tt.get_program_id x {ttatlas.pad = #ttatlas.pad<neutral = pos_inf, logical_shape = [32, 20]>} : i32
+// CHECK: module attributes {ttatlas.dram_base = 2415919104 : i64, ttatlas.layout = #ttatlas<layout tile_major>, ttatlas.precision_policy = "fp8-bf16-v1"}
+module attributes {ttatlas.dram_base = 2415919104 : i64, ttatlas.layout = #ttatlas<layout tile_major>, ttatlas.precision_policy = "fp8-bf16-v1"} {
+  // CHECK: func.func @tags() attributes {ttatlas.kernel = "{\22version\22: 2}"}
+  func.func @tags() attributes {ttatlas.kernel = "{\22version\22: 2}"} {
+    // CHECK: ttatlas.slot = #ttatlas.slot<index = 0, kind = memory, arg = 1, role = weight_fp8_kn, offset = 0, row_stride = 32, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], vector_layout = none, transposed = false, host_dtype = f8E4M3FN, tile_dtype = f8E4M3FN>
+    %a = tt.get_program_id x {ttatlas.slot = #ttatlas.slot<index = 0, kind = memory, arg = 1, role = weight_fp8_kn, offset = 0, row_stride = 32, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], vector_layout = none, transposed = false, host_dtype = f8E4M3FN, tile_dtype = f8E4M3FN>} : i32
+    // CHECK: ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 4>
+    %b = tt.get_program_id x {ttatlas.k_chain = #ttatlas.k_chain<id = 0, pos = 1, len = 4>} : i32
+    // CHECK: ttatlas.fold_bias_into_dot = true
+    %c = tt.get_program_id x {ttatlas.fold_bias_into_dot = true} : i32
+    // The v2 slot: masked other (-inf spelled as a word), a vector, a transposed weight and a constant tile.
+    // CHECK: #ttatlas.slot<index = 0, kind = memory, arg = 0, role = activation_fp8, offset = 0, row_stride = 32, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 20], other = -inf : bf16, vector_layout = none, transposed = false, host_dtype = bf16, tile_dtype = bf16>
+    %f = tt.get_program_id x {ttatlas.slot = #ttatlas.slot<index = 0, kind = memory, arg = 0, role = activation_fp8, offset = 0, row_stride = 32, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 20], other = -inf : bf16, vector_layout = none, transposed = false, host_dtype = bf16, tile_dtype = bf16>} : i32
+    // CHECK: #ttatlas.slot<index = 2, kind = memory, arg = 3, role = bias_bf16, offset = 7, row_stride = 1, col_stride = 1, block = [0, 0, 1, 32], valid = [0, 0, 1, 32], other = 1.000000e+00 : bf16, vector_layout = cols, transposed = false, host_dtype = bf16, tile_dtype = bf16>
+    %g = tt.get_program_id x {ttatlas.slot = #ttatlas.slot<index = 2, kind = memory, arg = 3, role = bias_bf16, offset = 7, row_stride = 1, col_stride = 1, block = [0, 0, 1, 32], valid = [0, 0, 1, 32], other = 1.0 : bf16, vector_layout = cols, transposed = false, host_dtype = bf16, tile_dtype = bf16>} : i32
+    // CHECK: #ttatlas.slot<index = 1, kind = memory, arg = 1, role = weight_fp8_nk, offset = 64, row_stride = 64, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], vector_layout = none, transposed = true, host_dtype = f8E4M3FN, tile_dtype = f8E4M3FN>
+    %h = tt.get_program_id x {ttatlas.slot = #ttatlas.slot<index = 1, kind = memory, arg = 1, role = weight_fp8_nk, offset = 64, row_stride = 64, col_stride = 1, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], vector_layout = none, transposed = true, host_dtype = f8E4M3FN, tile_dtype = f8E4M3FN>} : i32
+    // CHECK: #ttatlas.slot<index = 3, kind = constant, role = constant_bf16, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], pattern = dense<32640> : tensor<32x32xi16>, vector_layout = none, transposed = false, host_dtype = bf16, tile_dtype = bf16>
+    %i = tt.get_program_id x {ttatlas.slot = #ttatlas.slot<index = 3, kind = constant, role = constant_bf16, block = [0, 0, 32, 32], valid = [0, 0, 32, 32], pattern = dense<32640> : tensor<32x32xi16>, vector_layout = none, transposed = false, host_dtype = bf16, tile_dtype = bf16>} : i32
     return
   }
 }

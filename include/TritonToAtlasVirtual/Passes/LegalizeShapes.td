@@ -1,26 +1,37 @@
 // Included from ../Passes.td, which includes mlir/Pass/PassBase.td first.
-// Pass 4 of the TTIR -> Atlas pipeline. Contract: triton-atlas design agenda, page "Pass 4 · ttatlas-legalize-shapes".
-def LegalizeShapes : Pass<"ttatlas-legalize-shapes", "mlir::ModuleOp"> {
-  let summary = "Tile linalg compute to 32x32 (MLIR's SCF tile-and-fuse + unroll); pad, mask and tag the tiles";
+// Pass 4 of the TTIR -> Atlas pipeline, in small steps (4a, 4b, 4c, 4d). ttatlas-legalize-shapes is the pipeline
+// that runs them with canonicalize and CSE between (Pipeline.cpp); 4d is upstream's linalg-fold-unit-extent-dims.
+def PackBlocks : Pass<"ttatlas-pack-blocks", "mlir::ModuleOp"> {
+  let summary = "Step 4a: pack every linalg op into 32x32 tiles; clamp the lanes a padded reduction would read";
   let description = [{
-    Out: every linalg value is one tile (32 or 32x32) at constant extract_slice / insert_slice offsets; a larger
-    tt.load is read only through constant tile slices, and a larger stored tensor is built from one insert_slice per
-    tile (aligned, distinct, covering) over a tensor.empty. A tiled matmul's K loop, unrolled, is the K chain:
-    linalg.fill zero, then linalg.matmuls each taking the previous one's result; every linalg.fill writes a fresh
-    tile-sized tensor.empty (upstream's fold-tensor-empty patterns turn slices of a larger empty into small ones).
-    A load that is not whole tiles (a 16x16 load) is read by one tensor.pad up to whole tiles, and a stored value that
-    is not whole tiles is a constant crop from the origin of a tile or of a tensor built from tiles. Each
-    linalg.matmul carries ttatlas.mxu. Each memory boundary tile that holds padded lanes carries its own ttatlas.pad
-    (rank 2, that tile's logical shape; none on a full tile) on the op that yields it: the tt.load, the tensor.pad
-    or the extract_slice of a load, the producer of a stored tile. A reduction that reads padded lanes not holding its
-    identity reads them through a ttatlas.mask_apply linalg.mul or linalg.add by a constant mask tile. Tiling uses
-    MLIR's SCF driver (scf::tileConsumerAndFuseProducersUsingSCF, then scf::tileUsingSCF), padding
-    linalg::rewriteAsPaddedOp.
+    Generalizes the named linalg ops, folds a load's transpose into the ops that read it, then packs every
+    linalg.generic into 32-blocks with upstream linalg::pack (matmul B comes out packed transposed; no
+    outer_dims_perm). A pack of a tensor.empty becomes a tensor.empty and a pack of a splat constant a splat
+    constant. Before every BF16 row reduction over a padded column dimension a generic clamps the operand with
+    arith.minnumf / arith.maxnumf against raw-bit constant tiles: lanes inside the Triton block (masked lanes
+    included) stay bit-identical (0x7FFF / 0xFFFF), lanes outside it become the reduction's identity. A
+    contraction's K padding is the pack's zero. Rejects a padded K whose operand is not a load, and a padded
+    reduction it has no rule for.
   }];
+  let dependentDialects = ["mlir::linalg::LinalgDialect", "mlir::tensor::TensorDialect", "mlir::arith::ArithDialect"];
+}
 
-  // Loads the ttatlas dialect, so the tags this pass reads and writes can be built and are verified.
-  let dependentDialects = ["mlir::ttatlas::TTAtlasDialect",
-                           "mlir::linalg::LinalgDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::tensor::TensorDialect"];
+def FoldPackPairs : Pass<"ttatlas-fold-pack-pairs", "mlir::ModuleOp"> {
+  let summary = "Step 4b: fold every linalg.unpack -> linalg.pack pair with the same layout";
+  let description = [{
+    A pack of an unpack with the same inner_dims_pos, inner_tiles and types is the unpack's source, padded or not:
+    pad lanes are don't-care except where step 4a clamped them. One pack per load and one unpack per store remain.
+  }];
+  let dependentDialects = ["mlir::linalg::LinalgDialect"];
+}
+
+def TileGrid : Pass<"ttatlas-tile-grid", "mlir::ModuleOp"> {
+  let summary = "Step 4c: tile the packed block grid by 1 and unroll every loop";
+  let description = [{
+    scf::tileUsingSCF on each packed linalg op with tile size 1 on every grid dimension above 1 (a contraction's K
+    included, which chains the K steps through the accumulator) and 0 elsewhere, then a full unroll of every
+    scf.for. Each op ends as one 32x32 tile (3-D for a contraction); a row that spans several tiles is a chain of
+    reductions passing the partial through the init.
+  }];
+  let dependentDialects = ["mlir::linalg::LinalgDialect", "mlir::scf::SCFDialect", "mlir::tensor::TensorDialect"];
 }

@@ -57,12 +57,12 @@ tt.func @bias_accumulator(%x: tensor<32x32xf8E4M3FN>, %w: tensor<32x32xf8E4M3FN>
 
 // -----
 
-// Other ttatlas tags move from the dot onto its matmul (here ttatlas.mxu, which pass 4 normally sets).
+// Other ttatlas tags move from the dot onto its matmul (here ttatlas.fold_bias_into_dot).
 // CHECK-LABEL: tt.func @tag_moves
-// CHECK: linalg.matmul {ttatlas.mxu = 0 : i32}
+// CHECK: linalg.matmul {ttatlas.fold_bias_into_dot = true}
 tt.func @tag_moves(%x: tensor<32x32xf8E4M3FN>, %w: tensor<32x32xf8E4M3FN>) -> tensor<32x32xf32> {
   %zero = arith.constant dense<0.000000e+00> : tensor<32x32xf32>
-  %d = tt.dot %x, %w, %zero {ttatlas.mxu = 0 : i32} : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
+  %d = tt.dot %x, %w, %zero {ttatlas.fold_bias_into_dot = true} : tensor<32x32xf8E4M3FN> * tensor<32x32xf8E4M3FN> -> tensor<32x32xf32>
   tt.return %d : tensor<32x32xf32>
 }
 

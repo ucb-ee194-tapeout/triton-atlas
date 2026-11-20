@@ -1,4 +1,4 @@
-// Enums used by the ttatlas attributes. Values: triton-atlas design agenda, "Frozen encodings (v1)".
+// Enums used by the ttatlas attributes.
 #ifndef TRITON_ATLAS_TTATLAS_ENUMS
 #define TRITON_ATLAS_TTATLAS_ENUMS
 
@@ -6,6 +6,10 @@ include "mlir/IR/EnumAttr.td"
 include "TTAtlasDialect.td"
 
 // What a slot's tile is for (pass 6 sets it; pass 7 and the driver read it).
+// A weight's role names the HOST layout of its tile: weight_fp8_nk is [n][k], weight_fp8_kn is [k][n]. The tile the
+// matmul reads is always [n][k] (the MXU's form); when the host layout is kn the slot says transposed = true and the
+// packer writes the tile turned, so pass 7 adds no XLU transpose for it. Pass 7's XLU transpose is only for a matmul
+// whose own operand map reads [k][n], which pass 4 never produces from a packed weight.
 def TTAtlas_SlotRole : I32EnumAttr<"SlotRole", "role of a DRAM slot's tile", [
     I32EnumAttrCase<"activation_fp8", 0>, I32EnumAttrCase<"weight_fp8_nk", 1>,
     I32EnumAttrCase<"weight_fp8_kn", 2>, I32EnumAttrCase<"bias_bf16", 3>,
@@ -15,10 +19,16 @@ def TTAtlas_SlotRole : I32EnumAttr<"SlotRole", "role of a DRAM slot's tile", [
   let genSpecializedAttr = 0;
 }
 
-// Neutral element written into padded lanes (pass 4).
-def TTAtlas_PadNeutral : I32EnumAttr<"PadNeutral", "neutral element of padded lanes", [
-    I32EnumAttrCase<"zero", 0>, I32EnumAttrCase<"neg_inf", 1>,
-    I32EnumAttrCase<"one", 2>, I32EnumAttrCase<"pos_inf", 3>]> {
+// A memory slot is gathered from a pointer argument; a constant slot carries its own pattern.
+def TTAtlas_SlotKind : I32EnumAttr<"SlotKind", "kind of a DRAM slot", [
+    I32EnumAttrCase<"memory", 0>, I32EnumAttrCase<"constant", 1>]> {
+  let cppNamespace = "::mlir::ttatlas";
+  let genSpecializedAttr = 0;
+}
+
+// How a vector tile is spread over the 32x32 tile (none: not a vector).
+def TTAtlas_VectorLayout : I32EnumAttr<"VectorLayout", "layout of a vector tile", [
+    I32EnumAttrCase<"rows", 0>, I32EnumAttrCase<"cols", 1>, I32EnumAttrCase<"none", 2>]> {
   let cppNamespace = "::mlir::ttatlas";
   let genSpecializedAttr = 0;
 }

@@ -1,5 +1,5 @@
-// The ttatlas dialect: the tags our passes pass to each other. It defines attributes only, no ops. Encodings:
-// triton-atlas design agenda, "Frozen encodings (v1)". Dialect shape follows triton v3.9.0
+// The ttatlas dialect: the tags our passes pass to each other. It defines attributes only, no ops.
+// Dialect shape follows triton v3.9.0
 // include/triton/Dialect/TritonGPU/IR/TritonGPUDialect.td.
 #ifndef TRITON_ATLAS_TTATLAS_DIALECT
 #define TRITON_ATLAS_TTATLAS_DIALECT
@@ -11,8 +11,8 @@ def TTAtlas_Dialect : Dialect {
   let cppNamespace = "::mlir::ttatlas";
   let summary = "Tags the triton-atlas passes pass to each other (attributes only)";
   let description = [{
-    Typed attributes (#ttatlas.slot, #ttatlas.k_chain, #ttatlas.pad, #ttatlas<layout ...>) plus plain tags named
-    ttatlas.* that hold built-in attributes (ttatlas.mxu = 0 : i32). verifyOperationAttribute (and the region argument and
+    Typed attributes (#ttatlas.slot, #ttatlas.k_chain, #ttatlas<layout ...>) plus plain tags named
+    ttatlas.* that hold built-in attributes (ttatlas.fold_bias_into_dot = true). verifyOperationAttribute (and the region argument and
     result verifiers) check every ttatlas.* name on every op, argument and result, so a misspelled or mistyped tag fails where it is set.
   }];
   let useDefaultAttributePrinterParser = 1;

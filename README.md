@@ -109,31 +109,22 @@ Atlas hardware facts (tile size, slot size, MXU limits, scale codes, DRAM window
 that depends on the hardware in a way a constant can't hold gets an `atlas-hw:` comment with its source.
 `git grep -n "atlas-hw:\|target::"` lists every place the hardware reaches into the passes.
 
-Pass 4 (`ttatlas-legalize-shapes`) makes every linalg op one Atlas tile (32x32, or a 32-long row). It works on
-static rank-1 and rank-2 tensors.
-- Padding: a shape that isn't a multiple of 32 is padded with MLIR's `linalg::rewriteAsPaddedOp`. Padded lanes that a
-  reduction reads along a reduced dimension hold its identity (`matchReduction` + `arith::getNeutralElement`: 0 for a
-  sum or matmul K, -inf for max, +inf for min); other padded lanes are cropped later and hold zero.
-- Tiling: MLIR's SCF driver (`scf::tileConsumerAndFuseProducersUsingSCF`) tiles each consumer and fuses its producers,
-  then any op still larger than a tile is tiled again, reductions included, so a matmul's K becomes a chain of 32x32x32
-  matmuls. The tile loops are fully unrolled. Every matmul gets `ttatlas.mxu = 0 : i32` (MXU0 is the initial policy).
-- Masks: a `tt.load`/`tt.store` mask must be a compile-time leading box (`tl.arange(0, 64) < 50`, row or column, any
-  `expand_dims`/`broadcast` form); the shared evaluator in `Support/LaneValues.cpp` decides that. A head mask
-  (`offs > k`) or a runtime bound is rejected.
-- Boundary tags: each memory tile that holds padded lanes gets its own `ttatlas.pad` with its own logical shape, always
-  `[rows, cols]` (a row of n is `[1, n]`), on the op that yields it: the `tt.load`, the `tensor.pad` of a sub-tile load,
-  the `extract_slice` of a larger load, or the producer of a stored tile. The host fills an input tile's padded lanes
-  with the tag's value and crops an output tile.
-- Mask apply: on Atlas only kernel inputs get their padded lanes filled; pass 7 drops in-kernel `tensor.pad`. So when a
-  reduction reads padded lanes that may not hold its identity (they were computed, or the host fill differs), pass 4
-  inserts a `linalg.mul` by a 1/0 tile (sum, matmul K) or a `linalg.add` of a 0/-inf or 0/+inf tile (max, min), marked
-  `ttatlas.mask_apply`, which is the only marker of a mask; its constant tile must reach the kernel as data. It is
-  exact while the padded lanes are finite (0 * inf is NaN).
+Pass 4 (`ttatlas-legalize-shapes`) is data tiling: it makes every linalg value one Atlas tile (32x32, or a 32-long
+vector). It works on static rank-1 and rank-2 tensors, in steps with cleanup between them.
+- Pack (`PackBlocks`): each block is packed into 32x32 tiles with upstream `linalg.pack` / `linalg.unpack`, so the
+  memory boundary is one pack per `tt.load` and one unpack per stored value. A block smaller than a tile is padded by
+  the pack with zero. Lanes that a padded row reduction reads get a clamp mask in front of it, `max(min(x, hi), lo)`
+  with two constant tiles (a max or min reader needs only one); a contraction's K padding is the pack's zero.
+- Fold (`FoldPackPairs`): every unpack-then-pack pair between compute ops is folded, so compute stays packed from load
+  to store.
+- Tile (`TileGrid`): the grid is tiled and fully unrolled, so a matmul's K becomes a chain of 32x32x32 matmuls.
+- Masks: a `tt.load`/`tt.store` mask must be a compile-time rectangle (`tl.arange(0, 64) < 50`, row or column, any
+  `expand_dims`/`broadcast` form); the shared evaluator in `Support/LaneValues.cpp` decides that. A mask that is not
+  one rectangle or depends on a runtime value is rejected.
 
-Pass 4 states what the boundary needs, not how it is laid out: each boundary tile's logical shape and the value its
-padded lanes must hold (one value per load: its readers' shared identity, or zero when they differ, with a mask apply
-for the others), and the `ttatlas.mask_apply` constant tiles. Pass 6 decides how the host provides them; pass 7 lowers
-the mask apply and needs a row-min reduction for padded min reductions.
+Pass 6 (`ttatlas-assign-slots`) puts a `#ttatlas.slot` on every tile of every pack and unpack (one slot per tile, as an
+array), on a compute-free kernel's `tt.load` / `tt.store`, and on each clamp constant; pass 7 and the host packer read
+only slots. The weight role names the host layout of the tile (see `TTAtlasEnums.td`).
 
 Focused Pass 4 lit coverage is in `test/legalize-shapes/`. Run it with
 `make test T=test/legalize-shapes`; run the stage-contract fixtures separately with

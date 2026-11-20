@@ -6,7 +6,7 @@
 // Unused scalar arguments (Inductor passes sizes it doesn't read), an integer one used only by tl.assume, and an
 // f32 output (the driver converts Atlas's BF16).
 // CHECK-LABEL: tt.func @unused_scalar
-// CHECK: tt.store %{{.*}}, %{{.*}} {ttatlas.host_dtype = f32}
+// CHECK: tt.store %{{.*}}, %{{.*}}
 tt.func @unused_scalar(%eps: f32, %p: !tt.ptr<f32>, %n: i32, %stride: i32) {
   %c0 = arith.constant 0 : i32
   %pos = arith.cmpi sgt, %stride, %c0 : i32
@@ -24,7 +24,7 @@ tt.func @unused_scalar(%eps: f32, %p: !tt.ptr<f32>, %n: i32, %stride: i32) {
 // BF16 <-> f32 conversions, as arith.extf, arith.truncf and tt.fp_to_fp. A widening tt.fp_to_fp may carry any
 // rounding mode: widening is exact, so only narrowing must round to nearest even.
 // CHECK-LABEL: tt.func @conversions
-// CHECK: tt.load %{{.*}} {ttatlas.host_dtype = bf16}
+// CHECK: tt.load %{{.*}}
 // CHECK: arith.extf
 // CHECK: arith.truncf
 // CHECK: tt.fp_to_fp
@@ -43,12 +43,14 @@ tt.func @conversions(%p: !tt.ptr<bf16>) {
 
 // -----
 
-// 1 / x (Atlas's reciprocal table).
+// 1 / x and x / y (the reciprocal table, then a multiply).
 // CHECK-LABEL: tt.func @reciprocal
 // CHECK: arith.divf
-tt.func @reciprocal(%x: tensor<32x32xf32>) {
+// CHECK: arith.divf
+tt.func @reciprocal(%x: tensor<32x32xf32>, %y: tensor<32x32xf32>) {
   %one = arith.constant dense<1.000000e+00> : tensor<32x32xf32>
   %r = arith.divf %one, %x : tensor<32x32xf32>
+  %q = arith.divf %x, %y : tensor<32x32xf32>
   tt.return
 }
 

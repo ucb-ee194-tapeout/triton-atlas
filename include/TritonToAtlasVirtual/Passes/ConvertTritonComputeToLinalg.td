@@ -1,5 +1,5 @@
 // Included from ../Passes.td, which includes mlir/Pass/PassBase.td first.
-// Pass 3 of the TTIR -> Atlas pipeline. Contract: triton-atlas design agenda, page "Pass 3 · convert-triton-compute-to-linalg".
+// Pass 3 of the TTIR -> Atlas pipeline. Converts tensor compute to linalg.
 def ConvertTritonComputeToLinalg : Pass<"convert-triton-compute-to-linalg", "mlir::ModuleOp"> {
   let summary = "Convert TTIR compute on tensors to linalg; loads, stores and address math stay TTIR";
   let description = [{

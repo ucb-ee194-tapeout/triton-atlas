@@ -21,6 +21,10 @@ namespace mlir::triton {
 #define GEN_PASS_REGISTRATION
 #include "TritonToAtlasVirtual/Passes.h.inc"
 
+// Pass 4's steps with cleanup between them (Pipeline.cpp); also registered as
+// ttatlas-legalize-shapes.
+void buildLegalizeShapesPipeline(OpPassManager &pm);
+
 // Adds our passes, in order, to pm (lib/TritonToAtlasVirtual/Pipeline.cpp).
 void buildTritonToAtlasVirtualPipeline(OpPassManager &pm);
 

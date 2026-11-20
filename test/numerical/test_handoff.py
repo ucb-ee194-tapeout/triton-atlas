@@ -104,8 +104,10 @@ class HandoffTest(unittest.TestCase):
                     rejected('module {}', "expected an Atlas virtual-to-machine artifact")
                     rejected(baseline.replace('atlas.timing_state = "timed"', 'atlas.timing_state = "untimed"'),
                              "timed")
-                    rejected(baseline.replace("module attributes {", "module attributes {ttatlas.scale = 127 : i32, "),
-                             "unexpected TTAtlas metadata")
+                    rejected(
+                        baseline.replace("module attributes {",
+                                         "module attributes {ttatlas.kernel = \"{\\\"version\\\": 2}\", "),
+                        "unexpected TTAtlas metadata")
                     rejected(
                         baseline.replace('"atlas.start"() :',
                                          '"atlas.start"() {ttatlas.layout = #ttatlas<layout row_major>} :'),

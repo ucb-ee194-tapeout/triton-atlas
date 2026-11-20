@@ -6,7 +6,7 @@
 # "Atlas:" is where we differ from them; every other line is theirs.
 #
 # The "atlas_virtual" stage runs our C++ pipeline (lib/TritonToAtlasVirtual/Pipeline.cpp) and exports its
-# validated kernel manifest. Boundary conversion is implemented; upstream compute/legalization passes are pending.
+# validated kernel manifest.
 # Run mode (lowering to program.bin) comes in phase 2.
 import dataclasses
 import hashlib
@@ -24,15 +24,15 @@ from . import PACKAGE_DIR, PLUGIN_LIBRARY
 
 @lru_cache(maxsize=1)
 def _kernel_validator():
-    schema = json.loads((Path(__file__).parent / "schemas/ttatlas.kernel.v1.schema.json").read_text())
+    schema = json.loads((Path(__file__).parent / "schemas/ttatlas.kernel.v2.schema.json").read_text())
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema)
 
 
 def _validate_kernel_metadata(manifest, name):
     parsed = json.loads(manifest)
-    if not isinstance(parsed, dict) or parsed.get("version") != 1 or parsed.get("name") != name:
-        raise ValueError("ttatlas.kernel must be a version-1 manifest matching the Atlas function name")
+    if not isinstance(parsed, dict) or parsed.get("version") != 2 or parsed.get("name") != name:
+        raise ValueError("ttatlas.kernel must be a version-2 manifest matching the Atlas function name")
     _kernel_validator().validate(parsed)
     for table in (parsed["inputs"], parsed["outputs"]):
         if [entry["index"] for entry in table] != list(range(len(table))):
@@ -48,19 +48,12 @@ def _validate_kernel_metadata(manifest, name):
 def _export_kernel_metadata(mod, metadata):
     """Copy the finalized MLIR manifest verbatim; the driver owns its use."""
     functions = []
-    unconverted = []
 
     def collect(op):
         if op.get_name() == "func.func":
             functions.append((op.get_str_attr("sym_name"), op.get_str_attr("ttatlas.kernel")))
-        elif op.get_name() == "tt.func":
-            unconverted.append(op)
 
     mod.walk(collect)
-    if not functions and unconverted:
-        # Pass 7 converts a kernel only when it has no compute left to lower; until the compute patterns land the
-        # kernel stays TTIR and has no manifest to export.
-        return
     if len(functions) != 1:
         raise ValueError("Atlas metadata export requires exactly one converted func.func")
     name, manifest = functions[0]
