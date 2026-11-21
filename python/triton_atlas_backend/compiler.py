@@ -200,7 +200,7 @@ class AtlasBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_atlas_virtual(mod, metadata, options):
+    def make_atlas_virtual(mod, metadata, options, gluon=False):
         metadata["name"] = mod.get_entry_func_name()
         metadata["shared"] = 0
         if options is not None:
@@ -217,13 +217,24 @@ class AtlasBackend(BaseBackend):
                     json.dumps({"dram_base": options.dram_base, "layout": options.layout}, sort_keys=True)))
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.plugin.add_atlas_virtual_pipeline(pm)
-        pm.run(mod, "make_atlas_virtual")
+        if gluon:
+            passes.plugin.add_atlas_gluon_virtual_pipeline(pm)
+            pm.run(mod, "make_atlas_gluon_virtual")
+        else:
+            passes.plugin.add_atlas_virtual_pipeline(pm)
+            pm.run(mod, "make_atlas_virtual")
         _export_kernel_metadata(mod, metadata)
         return str(mod)
 
     def add_stages(self, stages, options, language):
-        if language != Language.TRITON:
-            raise NotImplementedError("the Atlas backend compiles Triton kernels only")
-        stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["atlas_virtual"] = lambda src, metadata: self.make_atlas_virtual(src, metadata, options)
+        if language == Language.TRITON:
+            stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
+            stages["atlas_virtual"] = lambda src, metadata: self.make_atlas_virtual(src, metadata, options)
+            return
+        if language == Language.GLUON:
+            # Keep GLIR in Triton's artifact/cache sequence, then run G0/G1
+            # before the ordinary TTIR-to-Atlas passes.
+            stages["glir"] = lambda src, metadata: src
+            stages["atlas_virtual"] = lambda src, metadata: self.make_atlas_virtual(src, metadata, options, gluon=True)
+            return
+        raise NotImplementedError("the Atlas backend compiles Triton or Gluon kernels only")

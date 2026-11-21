@@ -47,4 +47,10 @@ void buildTritonToAtlasVirtualPipeline(OpPassManager &pm) {
   // pipeline yet.
 }
 
+void buildGluonToAtlasVirtualPipeline(OpPassManager &pm) {
+  pm.addPass(createValidateGluon());
+  pm.addPass(createLowerGluonLayoutsToTTIR());
+  buildTritonToAtlasVirtualPipeline(pm);
+}
+
 } // namespace mlir::triton

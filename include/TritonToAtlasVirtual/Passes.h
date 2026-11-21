@@ -28,6 +28,10 @@ void buildLegalizeShapesPipeline(OpPassManager &pm);
 // Adds our passes, in order, to pm (lib/TritonToAtlasVirtual/Pipeline.cpp).
 void buildTritonToAtlasVirtualPipeline(OpPassManager &pm);
 
+// G0/G1 followed by the shared TTIR -> Atlas pipeline.  Kept separate from
+// the Triton builder so the established TTIR entry contract does not change.
+void buildGluonToAtlasVirtualPipeline(OpPassManager &pm);
+
 } // namespace mlir::triton
 
 #endif // TRITON_ATLAS_TRITONTOATLASVIRTUAL_PASSES_H

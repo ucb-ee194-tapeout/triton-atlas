@@ -65,6 +65,10 @@ static void registerAtlasPasses() {
   static mlir::PassPipelineRegistration<> pipeline(
       "ttatlas-pipeline", "Run the TTIR -> Atlas virtual passes in order",
       [](mlir::OpPassManager &pm) { buildTritonToAtlasVirtualPipeline(pm); });
+  static mlir::PassPipelineRegistration<> gluonPipeline(
+      "ttatlas-gluon-pipeline",
+      "Run Gluon preparation then the shared TTIR -> Atlas virtual passes",
+      [](mlir::OpPassManager &pm) { buildGluonToAtlasVirtualPipeline(pm); });
 }
 
 // Python sees this as passes.plugin.add_atlas_virtual_pipeline(pm). The
@@ -74,9 +78,16 @@ static void addAtlasVirtualPipeline(mlir::PassManager *pm,
   buildTritonToAtlasVirtualPipeline(*pm);
 }
 
+static void addAtlasGluonVirtualPipeline(mlir::PassManager *pm,
+                                         const std::vector<std::string> &) {
+  buildGluonToAtlasVirtualPipeline(*pm);
+}
+
 TRITON_PLUGIN_API plugin::PluginInfo *tritonGetPluginInfo() {
   static plugin::PassInfo passes[] = {
       {"atlas_virtual_pipeline", "0.1.0", addAtlasVirtualPipeline,
+       registerAtlasPasses},
+      {"atlas_gluon_virtual_pipeline", "0.1.0", addAtlasGluonVirtualPipeline,
        registerAtlasPasses},
   };
 
