@@ -19,6 +19,7 @@
 #include "triton/Tools/PluginUtils.h"
 #include "triton/Version.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include <iterator>
 
@@ -30,7 +31,8 @@ using namespace mlir::triton;
 static void registerAtlasDialects(mlir::DialectRegistry *registry) {
   registry->insert<mlir::atlas::AtlasDialect, mlir::ttatlas::TTAtlasDialect,
                    mlir::func::FuncDialect, mlir::arith::ArithDialect,
-                   mlir::triton::gluon::GluonDialect>();
+                   mlir::triton::gluon::GluonDialect,
+                   mlir::triton::gpu::TritonGPUDialect>();
   // func promises an inliner interface that lives in a separate extension;
   // without it Triton's inliner pass aborts
   // ("promised by dialect 'func' but never implemented"). The wheel doesn't
