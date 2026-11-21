@@ -43,7 +43,8 @@ struct ValidateGluon : impl::ValidateGluonBase<ValidateGluon> {
     WalkResult result = getOperation()->walk([&](Operation *op) {
       StringRef dialect = op->getName().getDialectNamespace();
       if (dialect == "ttg") {
-        reject(op, "contains a TritonGPU operation before Atlas layout normalization");
+        static_cast<void>(reject(
+            op, "contains a TritonGPU operation before Atlas layout normalization"));
         return WalkResult::interrupt();
       }
       if (dialect != "gluon")
@@ -51,7 +52,7 @@ struct ValidateGluon : impl::ValidateGluonBase<ValidateGluon> {
       if (auto anchor = dyn_cast<gluon::SetAutoLayoutOp>(op))
         return succeeded(checkAnchor(anchor)) ? WalkResult::advance()
                                                 : WalkResult::interrupt();
-      reject(op, "operation has no Atlas layout-normalization rule");
+      static_cast<void>(reject(op, "operation has no Atlas layout-normalization rule"));
       return WalkResult::interrupt();
     });
     if (result.wasInterrupted())

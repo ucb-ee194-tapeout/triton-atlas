@@ -55,7 +55,7 @@ struct EraseFunctionSignature : OpConversionPattern<FuncOp> {
     if (failed(getTypeConverter()->convertTypes(op.getArgumentTypes(), inputs)) ||
         failed(getTypeConverter()->convertTypes(op.getResultTypes(), results)))
       return failure();
-    rewriter.updateRootInPlace(op, [&] {
+    rewriter.modifyOpInPlace(op, [&] {
       for (auto [argument, type] : llvm::zip(op.getBody().front().getArguments(), inputs))
         argument.setType(type);
       op.setFunctionType(FunctionType::get(op.getContext(), inputs, results));
