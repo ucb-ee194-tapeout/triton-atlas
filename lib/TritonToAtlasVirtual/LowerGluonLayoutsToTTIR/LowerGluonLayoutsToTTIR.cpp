@@ -42,6 +42,28 @@ struct EraseAnchor : OpConversionPattern<gluon::SetAutoLayoutOp> {
   }
 };
 
+// Gluon kernels commonly expose an encoded tensor at the function boundary.
+// This conversion is one-to-one, so changing each entry argument in place is
+// safe; region-bearing *inner* operations remain deliberately unsupported.
+struct EraseFunctionSignature : OpConversionPattern<FuncOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(FuncOp op, OpAdaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Type> inputs;
+    SmallVector<Type> results;
+    if (failed(getTypeConverter()->convertTypes(op.getArgumentTypes(), inputs)) ||
+        failed(getTypeConverter()->convertTypes(op.getResultTypes(), results)))
+      return failure();
+    rewriter.updateRootInPlace(op, [&] {
+      for (auto [argument, type] : llvm::zip(op.getBody().front().getArguments(), inputs))
+        argument.setType(type);
+      op.setFunctionType(FunctionType::get(op.getContext(), inputs, results));
+    });
+    return success();
+  }
+};
+
 // Rebuild region-free operations with converted operands and result types.
 // This is intentionally generic: once a Gluon program has had layout removed,
 // its ordinary tt/arith operations retain their original names and attributes.
@@ -73,7 +95,11 @@ struct LowerGluonLayoutsToTTIR
     converter.addConversion([](Type type) { return eraseEncoding(type); });
 
     ConversionTarget target(getContext());
-    target.addLegalOp<ModuleOp, FuncOp>();
+    target.addLegalOp<ModuleOp>();
+    target.addDynamicallyLegalOp<FuncOp>([](FuncOp op) {
+      return llvm::all_of(op.getArgumentTypes(), isLayoutFree) &&
+             llvm::all_of(op.getResultTypes(), isLayoutFree);
+    });
     target.addDynamicallyLegalOp<gluon::SetAutoLayoutOp>([](auto) { return false; });
     target.markUnknownOpDynamicallyLegal([](Operation *op) {
       return op->getName().getDialectNamespace() != "gluon" &&
@@ -82,6 +108,7 @@ struct LowerGluonLayoutsToTTIR
 
     RewritePatternSet patterns(&getContext());
     patterns.add<EraseAnchor>(converter, &getContext());
+    patterns.add<EraseFunctionSignature>(converter, &getContext());
     patterns.add<EraseLayoutTypes>(converter, &getContext());
     if (failed(applyFullConversion(getOperation(), target, std::move(patterns))))
       signalPassFailure();
