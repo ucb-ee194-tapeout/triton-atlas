@@ -7,6 +7,7 @@
 include "mlir/Pass/PassBase.td"
 
 include "Passes/ValidateTTIR.td"                 // pass 1
+include "Passes/LowerGluonLayoutsToTTIR.td"      // Gluon frontend normalization
 include "Passes/Normalize.td"                    // pass 2
 include "Passes/ConvertTritonComputeToLinalg.td" // pass 3
 include "Passes/LegalizeShapes.td"               // pass 4
