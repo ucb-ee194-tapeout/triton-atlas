@@ -152,6 +152,15 @@ class AtlasBackend(BaseBackend):
     def get_module_map(self):
         return {}
 
+    def get_target_name(self, options) -> str:
+        """Name the target while Gluon's AST frontend creates GLIR.
+
+        Unlike ordinary TTIR creation, ``GluonASTSource.make_ir`` records the
+        backend target eagerly in the module.  Keep this stable and independent
+        of host hardware so offline Atlas compilation remains deterministic.
+        """
+        return f"atlas:{options.arch}"
+
     def load_dialects(self, context):
         # Nothing to do: Triton loads plugin dialects itself (extend_dialects_with in __init__.py;
         # triton v3.9.0 python/src/ir.cc:360-366).
