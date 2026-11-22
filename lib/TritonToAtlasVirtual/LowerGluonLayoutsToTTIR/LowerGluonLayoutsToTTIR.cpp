@@ -1,11 +1,9 @@
-// G1: convert Gluon's layout-carrying tensor types to the layout-free TTIR
-// contract used by Atlas.  G0 has already established that anchors are static
-// and rank 1/2; this pass deliberately refuses regions until their block
-// argument conversion is implemented.
+// G1: normalize GLIR's representation-only tensor layouts into the ordinary
+// TTIR type contract consumed by Atlas. A Gluon layout changes distribution,
+// not logical shape, element type, or SSA value flow.
 #include "TritonToAtlasVirtual/Passes.h"
 
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "triton/Dialect/Gluon/IR/Dialect.h"
 
 namespace mlir::triton {
@@ -31,86 +29,55 @@ bool isLayoutFreeOperation(Operation *op) {
          llvm::all_of(op->getResultTypes(), isLayoutFree);
 }
 
-struct EraseAnchor : OpConversionPattern<gluon::SetAutoLayoutOp> {
-  using OpConversionPattern::OpConversionPattern;
+// Layout removal is strictly one-to-one. Mutating result and block-argument
+// types preserves regions, terminators, attributes, and SSA value flow; the
+// previous generic dialect conversion rejected every region-bearing op.
+void eraseAllTensorEncodings(ModuleOp module) {
+  module.walk([&](Operation *op) {
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (BlockArgument argument : block.getArguments())
+          argument.setType(eraseEncoding(argument.getType()));
+    for (Value result : op->getResults())
+      result.setType(eraseEncoding(result.getType()));
+  });
 
-  LogicalResult matchAndRewrite(gluon::SetAutoLayoutOp op,
-                                OpAdaptor adaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, adaptor.getSrc());
-    return success();
-  }
-};
-
-// Gluon kernels commonly expose an encoded tensor at the function boundary.
-// This conversion is one-to-one, so changing each entry argument in place is
-// safe; region-bearing *inner* operations remain deliberately unsupported.
-struct EraseFunctionSignature : OpConversionPattern<FuncOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult matchAndRewrite(FuncOp op, OpAdaptor,
-                                ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Type> inputs;
-    SmallVector<Type> results;
-    if (failed(getTypeConverter()->convertTypes(op.getArgumentTypes(), inputs)) ||
-        failed(getTypeConverter()->convertTypes(op.getResultTypes(), results)))
-      return failure();
-    rewriter.modifyOpInPlace(op, [&] {
-      for (auto [argument, type] : llvm::zip(op.getBody().front().getArguments(), inputs))
-        argument.setType(type);
-      op.setFunctionType(FunctionType::get(op.getContext(), inputs, results));
-    });
-    return success();
-  }
-};
-
-// Rebuild region-free operations with converted operands and result types.
-// This is intentionally generic: once a Gluon program has had layout removed,
-// its ordinary tt/arith operations retain their original names and attributes.
-struct EraseLayoutTypes : ConversionPattern {
-  EraseLayoutTypes(TypeConverter &converter, MLIRContext *context)
-      : ConversionPattern(converter, MatchAnyOpTypeTag(), /*benefit=*/1, context) {}
-
-  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
-                                ConversionPatternRewriter &rewriter) const override {
-    if (!op->getRegions().empty())
-      return failure();
-    OperationState state(op->getLoc(), op->getName());
-    state.addOperands(operands);
-    state.addAttributes(op->getAttrs());
-    SmallVector<Type> results;
-    if (failed(getTypeConverter()->convertTypes(op->getResultTypes(), results)))
-      return failure();
-    state.addTypes(results);
-    Operation *replacement = rewriter.create(state);
-    rewriter.replaceOp(op, replacement->getResults());
-    return success();
-  }
-};
+  module.walk([&](FuncOp func) {
+    SmallVector<Type> inputs(func.getArgumentTypes());
+    SmallVector<Type> results(func.getResultTypes());
+    for (Type &input : inputs)
+      input = eraseEncoding(input);
+    for (Type &result : results)
+      result = eraseEncoding(result);
+    func.setFunctionType(FunctionType::get(func.getContext(), inputs, results));
+  });
+}
 
 struct LowerGluonLayoutsToTTIR
     : impl::LowerGluonLayoutsToTTIRBase<LowerGluonLayoutsToTTIR> {
   void runOnOperation() override {
-    TypeConverter converter;
-    converter.addConversion([](Type type) { return eraseEncoding(type); });
+    ModuleOp module = getOperation();
 
-    ConversionTarget target(getContext());
-    target.addLegalOp<ModuleOp>();
-    target.addDynamicallyLegalOp<FuncOp>([](FuncOp op) {
-      return llvm::all_of(op.getArgumentTypes(), isLayoutFree) &&
-             llvm::all_of(op.getResultTypes(), isLayoutFree);
-    });
-    target.addDynamicallyLegalOp<gluon::SetAutoLayoutOp>([](auto) { return false; });
-    target.markUnknownOpDynamicallyLegal([](Operation *op) {
-      return op->getName().getDialectNamespace() != "gluon" &&
-             isLayoutFreeOperation(op);
-    });
+    // G0 proved anchors are logically type-preserving. Erase them before
+    // normalizing all remaining SSA boundaries.
+    SmallVector<gluon::SetAutoLayoutOp> anchors;
+    module.walk([&](gluon::SetAutoLayoutOp op) { anchors.push_back(op); });
+    for (gluon::SetAutoLayoutOp anchor : anchors)
+      anchor.replaceAllUsesWith(anchor.getSrc());
+    for (gluon::SetAutoLayoutOp anchor : anchors)
+      anchor.erase();
 
-    RewritePatternSet patterns(&getContext());
-    patterns.add<EraseAnchor>(converter, &getContext());
-    patterns.add<EraseFunctionSignature>(converter, &getContext());
-    patterns.add<EraseLayoutTypes>(converter, &getContext());
-    if (failed(applyFullConversion(getOperation(), target, std::move(patterns))))
+    eraseAllTensorEncodings(module);
+
+    bool failed = false;
+    module.walk([&](Operation *op) {
+      if (op->getName().getDialectNamespace() == "gluon" ||
+          !isLayoutFreeOperation(op)) {
+        op->emitError("Atlas Gluon layout normalization left an encoded value or Gluon operation");
+        failed = true;
+      }
+    });
+    if (failed)
       signalPassFailure();
   }
 };
