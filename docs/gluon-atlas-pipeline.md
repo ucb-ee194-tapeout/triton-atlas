@@ -74,14 +74,10 @@ types.  Function argument/result types and entry-block arguments are converted
 together, preventing encoded values from leaking across a function boundary.
 
 G1's postcondition is mechanical and testable: no result or operand tensor has
-an encoding and no `gluon.set_auto_layout` remains.  The following pass (P1)
+an encoding and no `gluon.set_auto_layout` remains. It rewrites block arguments
+inside regions in place, so reductions, loops, branches, and their terminators
+retain their original structure and SSA value flow. The following pass (P1)
 therefore receives ordinary TTIR and cannot accidentally consume a GPU layout.
-
-Region-bearing inner operations are intentionally not accepted by G1 yet.
-Correct support needs block-argument conversion for each region, conversion of
-terminators/yields, and tests for branch and loop value flow.  Until that is
-implemented, conversion fails instead of producing malformed IR.  This is an
-explicit capability boundary, not a successful feature.
 
 ## Shared passes P1–P7
 
@@ -112,9 +108,12 @@ existing pipeline.
 
 1. `test/validate-gluon/anchors.mlir` checks a real AutoLayout anchor is
    accepted by G0 and erased by G1.
-2. `test/validate-gluon/reject-rank3-anchor.mlir` checks G0 rejects an
+2. `test/validate-gluon/region-reduce.mlir` checks a region-bearing
+   `tt.reduce`, its block arguments, and its terminator survive G1 with all
+   tensor encodings removed.
+3. `test/validate-gluon/reject-rank3-anchor.mlir` checks G0 rejects an
    out-of-scope rank-three anchor with an actionable diagnostic.
-3. `test/from-jit/test_gluon_from_jit.py` creates GLIR through the actual
+4. `test/from-jit/test_gluon_from_jit.py` creates GLIR through the actual
    Gluon Python frontend, includes `set_auto_layout`, and compiles it all the
    way to an Atlas schema-v2 manifest.
 4. The complete repository suite remains the final integration gate.  A pass
@@ -122,8 +121,6 @@ existing pipeline.
 
 ## Remaining supported-work checklist
 
-* Add region/block-argument conversion before claiming Gluon reductions,
-  `scf.if`, or loop-carried layouts are supported.
 * Add real frontend cases for rank-two elementwise work, reductions, masks,
   and matmul only as each reaches the shared P1–P7 contracts.
 * Add G0 diagnostics for Gluon-specific unsupported effects where P1's generic
