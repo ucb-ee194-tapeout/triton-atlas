@@ -15,6 +15,9 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <cstdlib>
 
 namespace mlir::triton {
 
@@ -550,8 +553,11 @@ LogicalResult checkCompute(ModuleOp module) {
 struct ConvertTritonComputeToLinalg
     : impl::ConvertTritonComputeToLinalgBase<ConvertTritonComputeToLinalg> {
   void runOnOperation() override {
+    const bool trace = std::getenv("TTATLAS_TRACE_P3") != nullptr;
     if (failed(checkCompute(getOperation())))
       return signalPassFailure();
+    if (trace)
+      llvm::errs() << "ttatlas P3: checked\n";
     MLIRContext *context = &getContext();
     ConversionTarget target(*context);
     target.addLegalDialect<linalg::LinalgDialect, tensor::TensorDialect>();
@@ -583,12 +589,22 @@ struct ConvertTritonComputeToLinalg
     // elementwise) and put it, unconverted, into a generic's body.
     patterns.add<FpToFpToArith>(context, /*benefit=*/2);
     patterns.add<ElementwiseToLinalgGeneric>(context);
+    if (trace)
+      llvm::errs() << "ttatlas P3: converting\n";
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
       return signalPassFailure();
+    if (trace)
+      llvm::errs() << "ttatlas P3: converted\n";
     eraseDeadLeftovers(getOperation());
+    if (trace)
+      llvm::errs() << "ttatlas P3: dce\n";
     freshOutputs(getOperation());
+    if (trace)
+      llvm::errs() << "ttatlas P3: fresh outputs\n";
     hoistTags(getOperation());
+    if (trace)
+      llvm::errs() << "ttatlas P3: done\n";
   }
 };
 
