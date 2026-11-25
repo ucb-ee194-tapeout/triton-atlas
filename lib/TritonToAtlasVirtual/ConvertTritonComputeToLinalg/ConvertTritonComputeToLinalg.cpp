@@ -71,6 +71,26 @@ linalg::FillOp makeFill(OpBuilder &builder, Location loc, Value value,
   return cast<linalg::FillOp>(builder.create(state));
 }
 
+// See makeFill: construct the linalg.matmul region before inserting the
+// operation so verification never observes the empty region produced by the
+// incompatible runtime builder.
+linalg::MatmulOp makeMatmul(OpBuilder &builder, Location loc, Type result,
+                            Value lhs, Value rhs, Value output) {
+  OperationState state(loc, linalg::MatmulOp::getOperationName());
+  linalg::MatmulOp::build(builder, state, TypeRange{result},
+                          ValueRange{lhs, rhs}, ValueRange{output});
+  assert(state.regions.size() == 1 && "linalg.matmul must have one region");
+  Block *body = new Block();
+  state.regions.front()->push_back(body);
+  for (Value operand : ValueRange{lhs, rhs, output})
+    body->addArgument(getElementTypeOrSelf(operand.getType()), loc);
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToEnd(body);
+  ImplicitLocOpBuilder regionBuilder(loc, builder);
+  linalg::MatmulOp::regionBuilder(regionBuilder, *body, {}, {});
+  return cast<linalg::MatmulOp>(builder.create(state));
+}
+
 // tt.dot -> linalg.matmul. A dot that starts from zero gets linalg.fill zero
 // as its output; a later step of a K chain accumulates onto the previous
 // step's matmul, which links the chain pass 2 tagged into one
@@ -97,9 +117,8 @@ struct DotToMatmul : OpConversionPattern<DotOp> {
     // how a GPU multiplies f32 (tf32, imprecise accumulation), and Atlas's MXU
     // multiplies FP8 E4M3 only (pass 1), so they have no meaning here. The
     // matmul_relu test input carries inputPrecision = tf32, for example.
-    auto matmul = linalg::MatmulOp::create(
-        rewriter, loc, TypeRange{op.getType()},
-        ValueRange{adaptor.getA(), adaptor.getB()}, ValueRange{init});
+    auto matmul = makeMatmul(rewriter, loc, op.getType(), adaptor.getA(),
+                             adaptor.getB(), init);
     copyTags(op, matmul);
     rewriter.replaceOp(op, matmul.getResult(0));
     return success();
