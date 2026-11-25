@@ -68,9 +68,11 @@ linalg::FillOp makeFill(OpBuilder &builder, Location loc, Value value,
   state.regions.front()->push_back(body);
   body->addArgument(value.getType(), loc);
   body->addArgument(getElementTypeOrSelf(output.getType()), loc);
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPointToEnd(body);
-  linalg::YieldOp::create(builder, loc, body->getArgument(0));
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(body);
+    linalg::YieldOp::create(builder, loc, body->getArgument(0));
+  }
   return cast<linalg::FillOp>(builder.create(state));
 }
 
@@ -88,10 +90,12 @@ linalg::MatmulOp makeMatmul(OpBuilder &builder, Location loc, Type result,
   SmallVector<Value> operands{lhs, rhs, output};
   for (Value operand : operands)
     body->addArgument(getElementTypeOrSelf(operand.getType()), loc);
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPointToEnd(body);
-  ImplicitLocOpBuilder regionBuilder(loc, builder);
-  linalg::MatmulOp::regionBuilder(regionBuilder, *body, {}, {});
+  {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(body);
+    ImplicitLocOpBuilder regionBuilder(loc, builder);
+    linalg::MatmulOp::regionBuilder(regionBuilder, *body, {}, {});
+  }
   return cast<linalg::MatmulOp>(builder.create(state));
 }
 
@@ -434,18 +438,20 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
     for (Value output : outputs)
       body->addArgument(getElementTypeOrSelf(output.getType()), op->getLoc());
 
-    OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToEnd(body);
-    SmallVector<Value> scalarArgs;
-    scalarArgs.append(body->getArguments().begin(),
-                      body->getArguments().begin() + operands.size());
-    SmallVector<Type> scalarResultTypes;
-    for (Type type : op->getResultTypes())
-      scalarResultTypes.push_back(getElementTypeOrSelf(type));
-    Operation *scalarOp = rewriter.create(
-        op->getLoc(), rewriter.getStringAttr(op->getName().getStringRef()),
-        scalarArgs, scalarResultTypes, op->getAttrs());
-    linalg::YieldOp::create(rewriter, op->getLoc(), scalarOp->getResults());
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToEnd(body);
+      SmallVector<Value> scalarArgs;
+      scalarArgs.append(body->getArguments().begin(),
+                        body->getArguments().begin() + operands.size());
+      SmallVector<Type> scalarResultTypes;
+      for (Type type : op->getResultTypes())
+        scalarResultTypes.push_back(getElementTypeOrSelf(type));
+      Operation *scalarOp = rewriter.create(
+          op->getLoc(), rewriter.getStringAttr(op->getName().getStringRef()),
+          scalarArgs, scalarResultTypes, op->getAttrs());
+      linalg::YieldOp::create(rewriter, op->getLoc(), scalarOp->getResults());
+    }
 
     auto generic = cast<linalg::GenericOp>(rewriter.create(state));
     copyTags(op, generic);
