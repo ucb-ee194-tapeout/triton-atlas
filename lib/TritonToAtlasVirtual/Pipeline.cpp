@@ -7,6 +7,8 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 
+#include <cstdlib>
+
 namespace mlir::triton {
 
 // canonicalize + CSE after passes 2, 5 and 4, so dead address math and the
@@ -18,31 +20,46 @@ static void addCleanup(OpPassManager &pm) {
   pm.addPass(createCSEPass());
 }
 
+static void addTraceCheckpoint(OpPassManager &pm) {
+  if (std::getenv("TTATLAS_TRACE_PIPELINE"))
+    pm.addPass(createPrintOpStatsPass());
+}
+
 // Pass 4: pack, fold, tile the block grid, fold unit dimensions, with
 // canonicalize and CSE after each step.
 void buildLegalizeShapesPipeline(OpPassManager &pm) {
   pm.addPass(createPackBlocks()); // 4a
+  addTraceCheckpoint(pm);
   addCleanup(pm);
   pm.addPass(createFoldPackPairs()); // 4b
+  addTraceCheckpoint(pm);
   addCleanup(pm);
   pm.addPass(createTileGrid()); // 4c
+  addTraceCheckpoint(pm);
   addCleanup(pm);
   pm.addPass(createLinalgFoldUnitExtentDimsPass()); // 4d
+  addTraceCheckpoint(pm);
   addCleanup(pm);
 }
 
 void buildTritonToAtlasVirtualPipeline(OpPassManager &pm) {
   pm.addPass(createValidateTTIR()); // 1
+  addTraceCheckpoint(pm);
   pm.addPass(createNormalize());    // 2
+  addTraceCheckpoint(pm);
   addCleanup(pm);
   pm.addPass(createConvertTritonComputeToLinalg()); // 3
+  addTraceCheckpoint(pm);
   // Dtypes before shapes: retyping the untiled kernel touches each op once,
   // and tiling then sees the final types. Pass numbers stay as they were.
   pm.addPass(createLegalizeDtypes()); // 5
+  addTraceCheckpoint(pm);
   addCleanup(pm);
   buildLegalizeShapesPipeline(pm);                 // 4
   pm.addPass(createAssignSlots());                 // 6
+  addTraceCheckpoint(pm);
   pm.addPass(createConvertTritonToAtlasVirtual()); // 7
+  addTraceCheckpoint(pm);
   // Pass 8 (atlas-mlir's verify-atlas-virtual-stream) is not part of this
   // pipeline yet.
 }
