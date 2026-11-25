@@ -163,6 +163,38 @@
     .detail-note h3 { font-size: 11px; }
     .detail-note p, .detail-note li, .detail-note li b { font-size: 11px; line-height: 1.55; }
     @media (max-width: 700px) { .top-meta .crumb { display: none; }.example { grid-template-columns: 1fr; }.tune-card { border-top: 1px solid var(--line); }.lower { grid-template-columns: 1fr; }.lower .panel:first-child { border-right: 0; border-bottom: 1px solid var(--line); }.detail-grid { grid-template-columns: 1fr; }.detail-note { border-left: 0; border-top: 1px solid var(--line); } }
+    /* Use document flow instead of squeezing the inspector into a fixed viewport. */
+    body { overflow: auto; }
+    .shell { display: block; min-height: 100vh; height: auto; }
+    main { display: grid; grid-template-columns: 215px minmax(0, 1fr); grid-template-rows: auto auto; min-height: 0; }
+    .hero { grid-column: 1; grid-row: 1 / span 2; align-self: start; position: sticky; top: 0; min-height: calc(100vh - 70px); }
+    .example { grid-column: 2; grid-row: 1; min-height: 540px; }
+    .code-card, .tune-card { min-height: 540px; }
+    .code-wrap { height: 390px; min-height: 0; overflow: auto; }
+    .lower { grid-column: 2; grid-row: 2; min-height: 440px; }
+    .pipeline { overflow: visible; }
+    .detail-grid { height: auto; min-height: 380px; }
+    .detail-code { min-height: 330px; }
+    .detail-note { min-height: 330px; }
+    .card-head, .panel-head { min-height: 48px; }
+    .card-head h2, .panel-head h2 { font-size: 12px; }
+    .card-head small, .panel-head p { font-size: 11px; }
+    .candidate .name, .candidate .cycles { font-size: 12px; }
+    .candidate small { font-size: 11px; }
+    footer { min-height: 34px; }
+    @media (max-width: 1040px) {
+      .hero { display: none; }
+      main { grid-template-columns: 1fr; grid-template-rows: auto auto; }
+      .example { grid-column: 1; grid-row: 1; }
+      .lower { grid-column: 1; grid-row: 2; }
+    }
+    @media (max-width: 700px) {
+      .example { min-height: 0; }
+      .code-card, .tune-card { min-height: 0; }
+      .code-wrap { height: 330px; }
+      .lower { min-height: 0; }
+      .detail-grid, .detail-code, .detail-note { min-height: 0; }
+    }
   </style>
 </head>
 <body>
