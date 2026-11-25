@@ -468,13 +468,23 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
 void freshOutputs(ModuleOp module) {
   IRRewriter rewriter(module.getContext());
   module.walk([&](linalg::GenericOp generic) {
+    Block &body = generic.getRegion().front();
+    const size_t inputCount = generic.getInputs().size();
+    size_t outputIndex = 0;
     for (OpOperand &init : generic.getDpsInitsMutable()) {
-      if (generic.payloadUsesValueFromOperand(&init) ||
-          init.get().getDefiningOp<tensor::EmptyOp>())
+      // payloadUsesValueFromOperand consults the generic's implicit
+      // terminator trait.  Triton's runtime and our build headers disagree on
+      // that trait, but the corresponding output block argument directly
+      // expresses the condition we need here.
+      if (!body.getArgument(inputCount + outputIndex).use_empty() ||
+          init.get().getDefiningOp<tensor::EmptyOp>()) {
+        ++outputIndex;
         continue;
+      }
       rewriter.setInsertionPoint(generic);
       Value empty = emptyLike(rewriter, generic.getLoc(), init.get().getType());
       rewriter.modifyOpInPlace(generic, [&] { init.set(empty); });
+      ++outputIndex;
     }
   });
 }
