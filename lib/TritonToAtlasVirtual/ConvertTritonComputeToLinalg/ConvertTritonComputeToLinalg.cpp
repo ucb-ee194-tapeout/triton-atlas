@@ -381,7 +381,9 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
   LogicalResult matchAndRewrite(
       Operation *op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    if (!isFloatElementwise(op) || op->getNumResults() == 0)
+    StringRef dialect = op->getName().getDialectNamespace();
+    if ((dialect != "arith" && dialect != "math") ||
+        !isFloatElementwise(op) || op->getNumResults() == 0)
       return failure();
     auto result = dyn_cast<RankedTensorType>(op->getResult(0).getType());
     if (!result)
