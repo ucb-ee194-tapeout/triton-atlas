@@ -605,6 +605,8 @@ struct ConvertTritonComputeToLinalg
     hoistTags(getOperation());
     if (trace)
       llvm::errs() << "ttatlas P3: done\n";
+    if (trace)
+      getOperation()->print(llvm::errs());
   }
 };
 
