@@ -81,30 +81,31 @@
     @media (max-width: 700px) { .shell { padding: 0 17px 34px; }.top-meta .crumb { display: none; }.hero { padding: 42px 0 32px; }.hero-stats { grid-template-columns: 1fr; gap: 12px; }.detail-grid { grid-template-columns: 1fr; }.detail-note { border-left: 0; border-top: 1px solid var(--line); }.runbar { align-items: flex-start; flex-direction: column; }.runbar code { max-width: 100%; }.facts { grid-template-columns: 1fr; } }
     /* Workbench treatment: compact, inspectable, and intentionally non-promotional. */
     :root {
-      --paper: #111416;
-      --paper-deep: #20262a;
-      --ink: #d9e0e1;
-      --muted: #899397;
-      --line: #2d3539;
-      --blue: #72c7d1;
-      --green: #7dc391;
-      --green-soft: #172b25;
-      --navy: #151a1c;
-      --navy-2: #202a2d;
-      --white: #171b1e;
+      --paper: #f2f4f3;
+      --paper-deep: #e6eaeb;
+      --ink: #1d282d;
+      --muted: #68767b;
+      --line: #d4dcde;
+      --blue: #1f7185;
+      --green: #2f7a4d;
+      --green-soft: #e7f2e9;
+      --navy: #f7faf9;
+      --navy-2: #edf3f2;
+      --white: #ffffff;
+      --panel: #ffffff;
       --shadow: none;
     }
-    html, body { min-height: 100%; background: #111416; }
+    html, body { min-height: 100%; background: #f2f4f3; }
     body { overflow: hidden; font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     .shell { display: grid; grid-template-rows: 43px minmax(0, 1fr) 27px; height: 100vh; max-width: none; padding: 0; }
-    .topbar { min-height: 43px; padding: 0 14px; border-color: var(--line); background: #15191b; }
-    .brand { color: #f0f4f4; font-weight: 650; }
-    .mark { width: 19px; height: 19px; color: #0e1416; background: var(--blue); }
+    .topbar { min-height: 43px; padding: 0 14px; border-color: var(--line); background: #ffffff; }
+    .brand { color: var(--ink); font-weight: 650; }
+    .mark { width: 19px; height: 19px; color: #ffffff; background: var(--blue); }
     .crumb, .top-meta { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .state { color: var(--green); }
     .state i { width: 6px; height: 6px; background: var(--green); }
-    main { display: grid; grid-template-columns: 215px minmax(0, 1fr); grid-template-rows: 41px minmax(0, 1fr) 214px; min-height: 0; }
-    .hero { grid-column: 1; grid-row: 1 / span 3; display: block; overflow: hidden; padding: 0; border: 0; border-right: 1px solid var(--line); background: #171b1e; }
+    main { display: grid; grid-template-columns: 215px minmax(0, 1fr); grid-template-rows: 41px minmax(0, 1fr) 214px; min-height: 0; background: #f2f4f3; }
+    .hero { grid-column: 1; grid-row: 1 / span 3; display: block; overflow: hidden; padding: 0; border: 0; border-right: 1px solid var(--line); background: #f8faf9; }
     .hero > div { display: block; padding: 50px 12px 0; }
     .eyebrow { margin-bottom: 8px; color: #5f6a6f; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
     h1 { margin: 0 0 19px; color: var(--ink); font: 650 14px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0; }
@@ -120,20 +121,20 @@
     .hero-stats > div { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--line); }
     .hero-stats b { color: var(--ink); font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .hero-stats span { margin: 0; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .example { grid-column: 2; grid-row: 1 / span 2; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 0; margin: 0; min-height: 0; background: #111416; }
-    .code-card, .tune-card, .panel { border: 0; border-radius: 0; background: #171b1e; box-shadow: none; }
+    .example { grid-column: 2; grid-row: 1 / span 2; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 0; margin: 0; min-height: 0; background: #f2f4f3; }
+    .code-card, .tune-card, .panel { border: 0; border-radius: 0; background: #ffffff; box-shadow: none; }
     .code-card { min-width: 0; border-right: 1px solid var(--line); }
-    .card-head, .panel-head { min-height: 41px; padding: 0 13px; border-color: var(--line); background: #15191b; }
+    .card-head, .panel-head { min-height: 41px; padding: 0 13px; border-color: var(--line); background: #f8faf9; }
     .card-head h2, .panel-head h2 { color: var(--ink); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .card-head small, .panel-head p { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .code-wrap { height: calc(100% - 103px); min-height: 260px; padding-top: 12px; background: #121719; }
-    .lines, .code { padding-top: 0; color: #c7d0d0; font: 12px/1.78 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .lines { color: #465157; }.code .kw { color: #77c9d3; }.code .fn { color: #dfc17e; }.code .type { color: #be9fda; }.code .comment { color: #68767a; }.code .accent { color: #d39a76; }
+    .code-wrap { height: calc(100% - 103px); min-height: 260px; padding-top: 12px; background: #fbfcfb; }
+    .lines, .code { padding-top: 0; color: #25343a; font: 12px/1.78 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .lines { color: #9aa7aa; }.code .kw { color: #176b7c; }.code .fn { color: #8a5b08; }.code .type { color: #704b91; }.code .comment { color: #7b898d; }.code .accent { color: #a1532b; }
     .facts { background: var(--line); }
-    .fact { padding: 8px 12px; background: #171b1e; }.fact span { color: #5f6a6f; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }.fact b { margin-top: 2px; color: var(--ink); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .fact { padding: 8px 12px; background: #ffffff; }.fact span { color: #7c898d; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }.fact b { margin-top: 2px; color: var(--ink); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .tune-card { overflow: auto; padding-bottom: 0; }
     .tune-card .card-head { border-bottom: 1px solid var(--line); }
-    .winner { margin: 13px; padding: 9px 10px; border: 1px solid #2b5960; border-left: 2px solid var(--blue); background: #172427; }
+    .winner { margin: 13px; padding: 9px 10px; border: 1px solid #b9d5d9; border-left: 2px solid var(--blue); background: #eef7f7; }
     .winner span { color: var(--blue); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em; }.winner strong { margin-top: 4px; color: var(--ink); font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace; }.winner p { margin: 3px 0 0; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .candidate { width: calc(100% - 26px); margin: 0 13px; padding: 11px 0; border-top-color: var(--line); }
     .candidate:hover { color: var(--blue); }.candidate .name { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }.candidate small { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }.candidate small .valid { color: var(--green); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }.candidate .cycles { color: var(--ink); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -143,11 +144,11 @@
     .pipeline { overflow: auto; padding: 4px 9px 8px; }
     .stage { padding: 6px 7px; grid-template-columns: 25px 1fr; gap: 8px; }
     .stage:not(:last-child)::after { left: 19px; top: 27px; bottom: -5px; background: var(--line); }
-    .stage-num { width: 22px; height: 22px; border-color: var(--line); background: #171b1e; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .stage.active .stage-num { color: #0e1416; background: var(--blue); border-color: var(--blue); }.stage-copy strong { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }.stage-copy span { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .detail { min-width: 0; }.detail-grid { min-height: 0; height: calc(100% - 57px); grid-template-columns: minmax(0, 1fr) 230px; }.detail-code { padding: 15px; background: #121719; color: #c7d0d0; font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }.detail-note { overflow: auto; padding: 15px; border-color: var(--line); }.detail-note h3 { margin-bottom: 8px; color: var(--blue); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }.detail-note p { margin-bottom: 12px; color: var(--muted); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }.detail-note li { padding: 6px 0; border-color: var(--line); color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }.detail-note li b { color: var(--ink); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .stage-num { width: 22px; height: 22px; border-color: var(--line); background: #ffffff; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .stage.active .stage-num { color: #ffffff; background: var(--blue); border-color: var(--blue); }.stage-copy strong { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }.stage-copy span { color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .detail { min-width: 0; }.detail-grid { min-height: 0; height: calc(100% - 57px); grid-template-columns: minmax(0, 1fr) 230px; }.detail-code { padding: 15px; background: #fbfcfb; color: #25343a; font: 11px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }.detail-note { overflow: auto; padding: 15px; border-color: var(--line); }.detail-note h3 { margin-bottom: 8px; color: var(--blue); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }.detail-note p { margin-bottom: 12px; color: var(--muted); font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }.detail-note li { padding: 6px 0; border-color: var(--line); color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }.detail-note li b { color: var(--ink); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .runbar { grid-column: 2; grid-row: 3; align-self: end; display: none; }
-    footer { grid-row: 3; display: flex; align-items: center; margin: 0; padding: 0 12px; border-top: 1px solid var(--line); background: #0c0f10; color: #6d797d; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    footer { grid-row: 3; display: flex; align-items: center; margin: 0; padding: 0 12px; border-top: 1px solid var(--line); background: #ffffff; color: #6d797d; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
     @media (max-width: 1040px) { body { overflow: auto; }.shell { height: auto; min-height: 100vh; }.hero { display: none; } main { grid-column: 1; grid-template-columns: 1fr; grid-template-rows: auto auto auto; }.example { grid-column: 1; grid-row: 1; }.lower { grid-column: 1; grid-row: 2; }.runbar { display: none; } }
     @media (max-width: 700px) { .top-meta .crumb { display: none; }.example { grid-template-columns: 1fr; }.tune-card { border-top: 1px solid var(--line); }.lower { grid-template-columns: 1fr; }.lower .panel:first-child { border-right: 0; border-bottom: 1px solid var(--line); }.detail-grid { grid-template-columns: 1fr; }.detail-note { border-left: 0; border-top: 1px solid var(--line); } }
   </style>
@@ -155,8 +156,7 @@
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand"><span class="mark">A</span><span>Atlas</span><span class="crumb">/ run inspector / experiment 0001</span></div>
-      <div class="top-meta"><span class="crumb">Triton → Atlas → npu_model</span><span class="state"><i></i><span id="state">PASS · model-backed</span></span></div>
+      <div class="brand"><span class="mark">A</span><span>Atlas compiler</span></div>
     </header>
     <main>
       <section class="hero">
@@ -201,6 +201,7 @@
       { title: 'P7 · emit + model', contract: 'measured program', subtitle: 'The winner is a real emitted program, not a heuristic estimate.', explanation: 'Each candidate is re-encoded, executed by the pinned model, checked for exact output and guards, then ranked by cycles.', facts: [['winner', 'baseline'], ['cycles', '3,342'], ['result', 'exact ✓']], code: 'program.schema       atlas.physical_program.v1\nselected_rtl         0079c054…\ntiming_provider      npu-model-rtl-match-v1\nword_count           51\n\nmodel: halted=true, runtime_errors=0' }
     ];
     const $ = id => document.getElementById(id);
+    const setRunState = value => { $('command').textContent = `$ ${value}`; };
     let currentStage = 0;
     let playback;
     function renderCandidates() {
@@ -228,12 +229,12 @@
       document.querySelectorAll('[data-stage]').forEach(button => button.addEventListener('click', () => { currentStage = Number(button.dataset.stage); renderStage(); }));
     }
     function playPath() {
-      clearInterval(playback); currentStage = 0; renderStage(); $('state').textContent = 'walking the compiler path'; $('play').textContent = 'Playing…';
-      playback = setInterval(() => { if (currentStage === stages.length - 1) { clearInterval(playback); $('play').textContent = 'Play compiler path'; $('state').textContent = 'measured on BWRC'; return; } currentStage += 1; renderStage(); }, 720);
+      clearInterval(playback); currentStage = 0; renderStage(); setRunState('walking compiler passes'); $('play').textContent = 'Playing…';
+      playback = setInterval(() => { if (currentStage === stages.length - 1) { clearInterval(playback); $('play').textContent = 'Play compiler path'; setRunState('make demo.autotune'); return; } currentStage += 1; renderStage(); }, 720);
     }
     function replayTune() {
-      $('state').textContent = 'measuring candidates'; $('tune-state').textContent = 'measuring…';
-      setTimeout(() => { $('state').textContent = 'measured on BWRC'; $('tune-state').textContent = '3 candidates · complete'; selectCandidate(0); }, 1250);
+      setRunState('replaying candidate measurements'); $('tune-state').textContent = 'measuring…';
+      setTimeout(() => { setRunState('make demo.autotune'); $('tune-state').textContent = '3 candidates · complete'; selectCandidate(0); }, 1250);
     }
     $('play').addEventListener('click', playPath); $('tune').addEventListener('click', replayTune); renderCandidates(); renderStage(); selectCandidate(0);
   </script>
