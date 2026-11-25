@@ -494,7 +494,9 @@ void freshOutputs(ModuleOp module) {
 // A walk after the conversion, for the same reason as freshOutputs.
 void hoistTags(ModuleOp module) {
   module.walk([](linalg::GenericOp generic) {
-    for (Operation &op : generic.getBody()->without_terminator()) {
+    for (Operation &op : generic.getRegion().front()) {
+      if (isa<linalg::YieldOp>(op))
+        continue;
       copyTags(&op, generic);
       for (NamedAttribute attr : llvm::to_vector(op.getDiscardableAttrs()))
         if (attr.getName().strref().starts_with("ttatlas."))
