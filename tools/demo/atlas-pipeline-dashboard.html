@@ -6,19 +6,19 @@
   <title>Atlas / measured compiler run</title>
   <style>
     :root {
-      --paper: #f4f3ef;
-      --paper-deep: #e9e8e3;
+      --paper: #eceeec;
+      --paper-deep: #e1e4e2;
       --ink: #16212b;
       --muted: #69747c;
       --line: #d5d6d1;
       --blue: #1f607d;
-      --orange: #c65d39;
+      --orange: #65737b;
       --green: #347254;
       --green-soft: #dcebe0;
       --navy: #172835;
       --navy-2: #213846;
       --white: #fffefa;
-      --shadow: 0 16px 38px rgba(22, 33, 43, .07);
+      --shadow: 0 4px 14px rgba(22, 33, 43, .045);
     }
     * { box-sizing: border-box; }
     html { background: var(--paper); }
@@ -33,22 +33,22 @@
     .top-meta { display: flex; align-items: center; gap: 18px; color: var(--muted); font-size: 12px; }
     .state { display: inline-flex; align-items: center; gap: 7px; color: var(--green); font-weight: 700; }
     .state i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
-    .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr); gap: 44px; padding: 62px 0 48px; align-items: end; }
-    .eyebrow { color: var(--orange); font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; text-transform: uppercase; }
-    h1 { max-width: 760px; margin: 13px 0 17px; font: 500 clamp(40px, 5.8vw, 78px)/.98 Georgia, "Times New Roman", serif; letter-spacing: -.055em; }
-    .lede { max-width: 620px; margin: 0; color: var(--muted); font-size: 17px; line-height: 1.55; }
-    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 25px; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr); gap: 24px; padding: 30px 0 27px; align-items: stretch; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--muted); font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { max-width: 760px; margin: 9px 0 8px; font: 650 32px/1.05 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -.045em; }
+    .lede { max-width: 700px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 17px; }
     .chip { padding: 5px 9px; border: 1px solid var(--line); color: var(--muted); background: rgba(255,254,250,.62); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    .hero-card { padding: 22px; border: 1px solid var(--line); background: var(--white); box-shadow: var(--shadow); }
-    .hero-card-label { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
-    .hero-card strong { display: block; margin-top: 10px; font: 500 39px/1 Georgia, "Times New Roman", serif; letter-spacing: -.04em; }
-    .hero-card p { margin: 7px 0 18px; color: var(--muted); }
+    .hero-card { padding: 16px 18px; border: 1px solid var(--line); background: var(--white); box-shadow: var(--shadow); }
+    .hero-card-label { color: var(--muted); font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    .hero-card strong { display: block; margin-top: 8px; font: 700 21px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: -.02em; }
+    .hero-card p { margin: 6px 0 14px; color: var(--muted); font-size: 12px; }
     .hero-rule { height: 1px; background: var(--line); }
     .hero-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding-top: 18px; }
-    .hero-stats b { display: block; font: 700 18px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .hero-stats b { display: block; font: 700 15px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .hero-stats span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
     .example { display: grid; grid-template-columns: minmax(0, 1.22fr) minmax(290px, .78fr); gap: 16px; margin-bottom: 16px; }
-    .code-card, .tune-card, .panel { border: 1px solid var(--line); background: var(--white); box-shadow: 0 5px 18px rgba(22,33,43,.035); }
+    .code-card, .tune-card, .panel { border: 1px solid var(--line); background: var(--white); box-shadow: none; }
     .card-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
     .card-head h2 { margin: 0; font-size: 13px; letter-spacing: .02em; }
     .card-head small { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -60,11 +60,11 @@
     .facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
     .fact { padding: 14px 17px; background: var(--white); }.fact span { color: var(--muted); font-size: 11px; }.fact b { display: block; margin-top: 3px; font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .tune-card { padding-bottom: 14px; }.tune-card .card-head { border-bottom: 0; }
-    .winner { margin: 0 17px 17px; padding: 15px; background: var(--green-soft); border-left: 3px solid var(--green); }
+    .winner { margin: 0 17px 9px; padding: 11px 12px; background: var(--green-soft); border-left: 3px solid var(--green); }
     .winner span { color: var(--green); font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em; text-transform: uppercase; }
-    .winner strong { display: block; margin-top: 6px; font-size: 18px; }.winner p { margin: 4px 0 0; color: #4d6657; font-size: 12px; }
+    .winner strong { display: block; margin-top: 4px; font: 700 14px ui-monospace, SFMono-Regular, Menlo, monospace; }.winner p { margin: 3px 0 0; color: #4d6657; font-size: 11px; }
     .candidate { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; width: calc(100% - 34px); margin: 0 17px; padding: 13px 0; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
-    .candidate:hover { color: var(--blue); }.candidate .name { font-weight: 700; }.candidate small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }.candidate .cycles { font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .candidate:hover { color: var(--blue); }.candidate .name { font-weight: 700; }.candidate small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }.candidate small .valid { color: var(--green); font: 700 9px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .06em; }.candidate .cycles { font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .track { height: 5px; margin-top: 8px; background: var(--paper-deep); }.track i { display: block; height: 100%; background: var(--blue); }
     .lower { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 16px; }
     .panel-head { padding: 15px 18px; border-bottom: 1px solid var(--line); }.panel-head h2 { margin: 0; font-size: 13px; }.panel-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
@@ -84,16 +84,16 @@
 <body>
   <div class="shell">
     <header class="topbar">
-      <div class="brand"><span class="mark">A</span><span>Atlas</span><span class="crumb">/ compiler lab / worked run</span></div>
-      <div class="top-meta"><span class="crumb">Triton → Atlas → model</span><span class="state"><i></i><span id="state">measured on BWRC</span></span></div>
+      <div class="brand"><span class="mark">A</span><span>Atlas</span><span class="crumb">/ run inspector / experiment 0001</span></div>
+      <div class="top-meta"><span class="crumb">Triton → Atlas → npu_model</span><span class="state"><i></i><span id="state">PASS · model-backed</span></span></div>
     </header>
     <main>
       <section class="hero">
-        <div><div class="eyebrow">Demo 01 · model-backed autotuning</div><h1>A Triton kernel, measured on Atlas.</h1><p class="lede">Three implementations of the same FP8 matmul + ReLU. The compiler heuristics lower every candidate; the execution-driven model decides which correct program is fastest.</p><div class="chips"><span class="chip">Triton 3.9.0</span><span class="chip">npu_model 337e9f2</span><span class="chip">RTL 0079c054</span><span class="chip">32 × 32 tile</span></div></div>
-        <aside class="hero-card"><span class="hero-card-label">selected candidate</span><strong id="hero-candidate">baseline</strong><p id="hero-copy">The smallest valid emitted program for this input.</p><div class="hero-rule"></div><div class="hero-stats"><div><b id="hero-cycles">3,342</b><span>simulated cycles</span></div><div><b>1,024 / 1,024</b><span>exact outputs</span></div><div><b>0</b><span>guard writes</span></div></div></aside>
+        <div><div class="eyebrow">experiment / ATLAS-0001 / completed</div><h1>matmul_relu</h1><p class="lede">Static 32 × 32 FP8 matmul with ReLU. Three source candidates were compiled independently, executed with RTL numerics, and ranked only after output and memory-guard validation.</p><div class="chips"><span class="chip">compiler: Triton 3.9.0</span><span class="chip">model: 337e9f2</span><span class="chip">rtl: 0079c054</span><span class="chip">seed: 187</span></div></div>
+        <aside class="hero-card"><span class="hero-card-label">result / lowest valid cycle count</span><strong id="hero-candidate">baseline</strong><p id="hero-copy">Fastest candidate after exact output and guard checks.</p><div class="hero-rule"></div><div class="hero-stats"><div><b id="hero-cycles">3,342</b><span>cycles</span></div><div><b>1,024 / 1,024</b><span>BF16 outputs</span></div><div><b>0</b><span>guard writes</span></div></div></aside>
       </section>
       <section class="example" aria-label="Worked kernel and candidate measurements">
-        <article class="code-card"><div class="card-head"><h2>Worked kernel</h2><small>test/from-jit/kernels.py</small></div><div class="code-wrap"><pre class="lines" aria-hidden="true"><span>01</span><span>02</span><span>03</span><span>04</span><span>05</span><span>06</span><span>07</span><span>08</span><span>09</span><span>10</span><span>11</span></pre><pre class="code"><span class="kw">@triton.jit</span>
+        <article class="code-card"><div class="card-head"><h2>source / baseline</h2><small>tools/demo/atlas_autotune_demo.py: baseline</small></div><div class="code-wrap"><pre class="lines" aria-hidden="true"><span>01</span><span>02</span><span>03</span><span>04</span><span>05</span><span>06</span><span>07</span><span>08</span><span>09</span><span>10</span><span>11</span></pre><pre class="code"><span class="kw">@triton.jit</span>
 <span class="kw">def</span> <span class="fn">baseline</span>(A, B, C):
     rows = tl.arange(0, 32)
     cols = tl.arange(0, 32)
@@ -103,15 +103,15 @@
     acc = tl.maximum(acc, 0.0)
     tl.store(C + rows[:, None] * 32 + cols[None, :], acc)
 <span class="comment"># ordinary Triton source; Atlas owns the lowering</span></pre></div><div class="facts"><div class="fact"><span>input</span><b>FP8 × FP8</b></div><div class="fact"><span>accumulator</span><b>BF16 / MXU0</b></div><div class="fact"><span>output</span><b>FP32 host view</b></div><div class="fact"><span>verification</span><b>bit-exact + guards</b></div></div></article>
-        <aside class="tune-card"><div class="card-head"><h2>Autotuning session</h2><small id="tune-state">3 candidates · complete</small></div><div class="winner"><span>selected</span><strong id="winner-name">baseline</strong><p id="winner-note">Lowest cycle count among correct candidates.</p></div><div id="candidates"></div></aside>
+        <aside class="tune-card"><div class="card-head"><h2>candidate measurements</h2><small id="tune-state">3 / 3 complete</small></div><div class="winner"><span>selected by objective: cycles</span><strong id="winner-name">baseline</strong><p id="winner-note">3,342 cycles · output and guards valid</p></div><div id="candidates"></div></aside>
       </section>
       <section class="lower">
-        <aside class="panel"><div class="panel-head"><h2>Compiler path</h2><p>Click a stage to inspect the handoff.</p></div><div class="pipeline" id="pipeline"></div></aside>
+        <aside class="panel"><div class="panel-head"><h2>pass trace</h2><p>Click a stage to inspect its contract and output.</p></div><div class="pipeline" id="pipeline"></div></aside>
         <article class="panel detail"><div class="panel-head"><h2 id="detail-title">Source Triton</h2><p id="detail-subtitle">The starting point is ordinary user code.</p></div><div class="detail-grid"><pre class="detail-code" id="detail-code"></pre><aside class="detail-note"><h3 id="detail-contract">frontend input</h3><p id="detail-explanation"></p><ul id="detail-facts"></ul></aside></div></article>
       </section>
-      <div class="runbar"><code>make demo.autotune</code><button id="play" type="button">Play compiler path</button><button id="tune" type="button">Replay measurements</button></div>
+      <div class="runbar"><code>$ make demo.autotune</code><button id="play" type="button">step through passes</button><button id="tune" type="button">replay measurements</button></div>
     </main>
-    <footer><span>Atlas compiler explorer · a real model-backed run, presented as a small instrument.</span><span class="mono">demo/atlas-autotune</span></footer>
+    <footer><span>Run inspector · source, pass contracts, emitted program, model result.</span><span class="mono">demo/atlas-autotune</span></footer>
   </div>
   <script>
     const candidates = [
@@ -134,7 +134,7 @@
     let playback;
     function renderCandidates() {
       const slowest = Math.max(...candidates.map(c => c.cycles));
-      $('candidates').innerHTML = candidates.map((candidate, index) => `<button class="candidate" type="button" data-candidate="${index}"><span><span class="name">${candidate.name}${candidate.winner ? ' · winner' : ''}</span><small>${candidate.note}</small><span class="track"><i style="width:${Math.round(candidate.cycles / slowest * 100)}%"></i></span></span><span class="cycles">${candidate.cycles.toLocaleString()}</span></button>`).join('');
+      $('candidates').innerHTML = candidates.map((candidate, index) => `<button class="candidate" type="button" data-candidate="${index}"><span><span class="name">${candidate.name}${candidate.winner ? ' · winner' : ''}</span><small><b class="valid">VALID</b> · ${candidate.note}</small><span class="track"><i style="width:${Math.round(candidate.cycles / slowest * 100)}%"></i></span></span><span class="cycles">${candidate.cycles.toLocaleString()}</span></button>`).join('');
       document.querySelectorAll('[data-candidate]').forEach(button => button.addEventListener('click', () => selectCandidate(Number(button.dataset.candidate))));
     }
     function selectCandidate(index) {
