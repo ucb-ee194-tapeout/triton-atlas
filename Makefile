@@ -160,6 +160,10 @@ test: build.tools ## run the lit tests in test/; T=<file or folder> runs some
 test.numerical: build.tools ## run matmul_relu on npu_model and compare every output (needs make setup.atlas.full)
 	scripts/build.sh numerical
 
+.PHONY: demo.autotune
+demo.autotune: build.tools ## compile and model-measure equivalent Triton candidates, then select the fastest
+	scripts/build.sh autotune_demo
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Format
 # ----------------------------------------------------------------------------------------------------------------------

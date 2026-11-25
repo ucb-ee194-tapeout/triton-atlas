@@ -71,6 +71,27 @@ def _require_root(value, variable):
     return root
 
 
+def _add_model_site_packages():
+    """Expose model-only dependencies without shadowing the Atlas Triton venv.
+
+    BWRC keeps Triton/plugin and Torch/npu_model in separate Python 3.14
+    environments.  The Atlas process must keep its own Triton import (the
+    plugin is ABI-locked to it), while the execution model still needs Torch.
+    Appending the model interpreter's site-packages just before importing
+    Torch provides that split safely.
+    """
+    python = os.environ.get("ATLAS_MODEL_PYTHON", "")
+    if not python:
+        return
+    # Do not resolve the venv's Python symlink: its parent is the venv root,
+    # while the resolved interpreter often lives in uv's shared cache.
+    interpreter = Path(python).expanduser().absolute()
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    site = interpreter.parent.parent / "lib" / version / "site-packages"
+    if site.is_dir() and str(site) not in sys.path:
+        sys.path.append(str(site))
+
+
 def _instruction(row, inventory, isa):
     """Create and independently verify one npu_model instruction."""
     from npu_model.isa import SBType, SType, UJType, UType, VIType
@@ -118,6 +139,7 @@ def run(program_json, initial, dram_base, *, max_cycles=500_000):
     sys.path.insert(0, str(model_root))
     sys.path.insert(0, str(atlas_root))
     try:
+        _add_model_site_packages()
         import torch
         from npu_model.configs import isa_definition as isa
         from npu_model.configs.hardware.default import DefaultHardwareConfig

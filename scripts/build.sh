@@ -84,6 +84,25 @@ numerical() {
         --model-python "$NPU_MODEL_PYTHON" --model-root "$NPU_MODEL_ROOT"
 }
 
+# Tune a few equivalent Triton kernels with the execution-driven model. The
+# compiler venv owns Triton/plugin; the adapter uses ATLAS_MODEL_PYTHON for the
+# model venv's Torch dependency without importing a second Triton.
+autotune_demo() {
+    local problem
+    problem="$(npu_model_check)" || die "$problem"
+    [ -x build/bin/atlas-opt ] && [ -x build/bin/atlas-emit ] ||
+        die "no atlas-opt or atlas-emit; run make setup.atlas.full"
+    [ -n "${NPU_MODEL_ROOT:-}" ] || die "NPU_MODEL_ROOT is required"
+    [ -n "${NPU_MODEL_PYTHON:-}" ] || die "NPU_MODEL_PYTHON is required"
+    mkdir -p build/autotune
+    ATLAS_MODEL_ROOT="${ATLAS_MODEL_ROOT:-$NPU_MODEL_ROOT}" \
+        ATLAS_MODEL_PYTHON="${ATLAS_MODEL_PYTHON:-$NPU_MODEL_PYTHON}" \
+        ATLAS_MLIR_ROOT="${ATLAS_MLIR_ROOT:-$PWD/third_party/atlas-mlir}" \
+        ATLAS_OOT_BIN_DIR="${ATLAS_OOT_BIN_DIR:-$PWD/build/bin}" \
+        TRITON_ATLAS_OPT="${TRITON_ATLAS_OPT:-$PWD/build/bin/triton-atlas-opt}" \
+        python tools/demo/atlas_autotune_demo.py --report build/autotune/atlas-autotune.json
+}
+
 # Build the server in folder $1 and link it where editors look.
 link_lsp() {
     cmake --build "$1" --target triton-atlas-lsp

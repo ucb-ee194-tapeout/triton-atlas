@@ -49,6 +49,15 @@ print(kernel.asm["atlas_virtual"].decode())
 
 To dump each stage: `TRITON_KERNEL_DUMP=1 TRITON_DUMP_DIR=$PWD/dump TRITON_ALWAYS_COMPILE=1`.
 
+### Model-backed autotuning demo
+
+`tools/demo/atlas_autotune_demo.py` defines three ordinary `@triton.jit`
+implementations of the same 32x32 FP8 matmul + ReLU. Each candidate runs
+through Atlas's tiling, scheduling, delay insertion, slot assignment,
+spilling, and emission passes, then executes on the pinned cycle-accurate
+`npu_model`. Candidates are rejected if their BF16 output or memory guards
+differ, so only correct programs are ranked.
+
 ## Developing the backend
 
 Needs Linux x86-64, git and [uv](https://docs.astral.sh/uv/).
@@ -86,6 +95,7 @@ triton-atlas/
 | Run the tests | `make test` |
 | Run some tests | `make test T=<file or folder>`; `LIT_FILTER=<regex>` picks by name |
 | Check numbers on npu_model | `make test.numerical` (opt-in; needs `make setup.atlas.full` and the npu_model settings in `env.sh`) |
+| Tune Triton candidates on npu_model | `make demo.autotune` (model-measure candidates and select the lowest-cycle valid program) |
 | Run passes on one file | `triton-atlas-opt kernel.ttir --ttatlas-pipeline` (all of them) or `--<pass-name>` (one) |
 | Run pass 4 tiling, mask checks, and MXU tagging | `triton-atlas-opt input.mlir --ttatlas-legalize-shapes` |
 | Compile a kernel | `uv run python my_kernel.py` |
