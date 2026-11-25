@@ -56,19 +56,19 @@ Value emptyLike(OpBuilder &builder, Location loc, Type type) {
 // preserving the standard linalg.fill semantics.
 linalg::FillOp makeFill(OpBuilder &builder, Location loc, Value value,
                         Value output) {
-  auto fill = linalg::FillOp::create(builder, loc, ValueRange{value},
-                                     ValueRange{output});
-  if (!fill.getRegion().empty())
-    return fill;
-
+  // FillOp::create inserts (and verifies) the operation before returning it.
+  // Construct the state first so the body exists at that verification point.
+  OperationState state(loc, linalg::FillOp::getOperationName());
+  linalg::FillOp::build(builder, state, ValueRange{value}, ValueRange{output});
+  assert(state.regions.size() == 1 && "linalg.fill must have one region");
   Block *body = new Block();
-  fill.getRegion().push_back(body);
+  state.regions.front()->push_back(body);
   body->addArgument(value.getType(), loc);
   body->addArgument(getElementTypeOrSelf(output.getType()), loc);
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToEnd(body);
   linalg::YieldOp::create(builder, loc, body->getArgument(0));
-  return fill;
+  return cast<linalg::FillOp>(builder.create(state));
 }
 
 // tt.dot -> linalg.matmul. A dot that starts from zero gets linalg.fill zero
