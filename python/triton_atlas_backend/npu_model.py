@@ -9,12 +9,57 @@ import dataclasses
 import inspect
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 MODEL_REVISION = "337e9f249f938a1dff007ddf8a763e5cd4b3aa2b"
+
+
+def _tool(path, name):
+    found = shutil.which(str(path)) if not os.path.sep in str(path) else path
+    value = Path(found or path).expanduser().resolve()
+    if not value.is_file() or not os.access(value, os.X_OK):
+        raise RuntimeError(f"{name} is not executable: {value}")
+    return value
+
+
+def emit(virtual_ir, *, triton_atlas_opt=None, atlas_bin=None):
+    """Lower one Atlas virtual module to the emitted program JSON.
+
+    This is the exact production handoff: no interpreter or synthetic cost
+    model is substituted between Triton's virtual stream and npu_model.
+    ``ATLAS_OOT_BIN_DIR`` names atlas-opt/atlas-emit and
+    ``TRITON_ATLAS_OPT`` names the plugin cleanup tool when arguments are
+    omitted.
+    """
+    atlas_bin = Path(atlas_bin or os.environ.get("ATLAS_OOT_BIN_DIR", "")).expanduser()
+    atlas_opt = _tool(atlas_bin / "atlas-opt", "atlas-opt")
+    atlas_emit = _tool(atlas_bin / "atlas-emit", "atlas-emit")
+    triton_opt = _tool(triton_atlas_opt or os.environ.get("TRITON_ATLAS_OPT", "triton-atlas-opt"),
+                       "triton-atlas-opt")
+    if isinstance(virtual_ir, bytes):
+        virtual_ir = virtual_ir.decode()
+    with tempfile.TemporaryDirectory(prefix="ttatlas-emit-") as directory:
+        directory = Path(directory)
+        virtual = directory / "kernel.virtual.mlir"
+        machine = directory / "kernel.machine.mlir"
+        emitted = directory / "kernel.emit.mlir"
+        virtual.write_text(virtual_ir)
+        commands = [
+            [atlas_opt, virtual, "--allow-unregistered-dialect", "--atlas-compile", "-o", machine],
+            [triton_opt, machine, "--ttatlas-finalize-machine-handoff", "-o", emitted],
+            [atlas_emit, "--program-json", emitted],
+        ]
+        output = None
+        for command in commands:
+            completed = subprocess.run(list(map(str, command)), capture_output=True, text=True)
+            if completed.returncode:
+                raise RuntimeError(f"{' '.join(map(str, command))}\n{completed.stderr.strip()}")
+            output = completed.stdout
+        return json.loads(output)
 
 
 def _require_root(value, variable):
