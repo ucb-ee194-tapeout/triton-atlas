@@ -65,9 +65,9 @@ struct DotToMatmul : OpConversionPattern<DotOp> {
       Type element = getElementTypeOrSelf(op.getType());
       Value zero = arith::ConstantOp::create(rewriter, loc, element,
                                              rewriter.getZeroAttr(element));
-      init = linalg::FillOp::create(rewriter, loc, zero,
+      init = linalg::FillOp::create(rewriter, loc, Value{zero},
                                     emptyLike(rewriter, loc, op.getType()))
-                 .getResult(0);
+                 .result();
     }
     // tt.dot's inputPrecision and maxNumImpreciseAcc are dropped: they choose
     // how a GPU multiplies f32 (tf32, imprecise accumulation), and Atlas's MXU
@@ -230,7 +230,7 @@ struct SplatToFill : OpConversionPattern<SplatOp> {
   matchAndRewrite(SplatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto fill = linalg::FillOp::create(rewriter, loc, adaptor.getSrc(),
+    auto fill = linalg::FillOp::create(rewriter, loc, Value{adaptor.getSrc()},
                                        emptyLike(rewriter, loc, op.getType()));
     copyTags(op, fill);
     rewriter.replaceOp(op, fill->getResults());
@@ -280,9 +280,9 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
       return rewriter.notifyMatchFailure(op, "no identity for this combine");
     Location loc = op.getLoc();
     Value start = arith::ConstantOp::create(rewriter, loc, identity);
-    Value init = linalg::FillOp::create(rewriter, loc, start,
+    Value init = linalg::FillOp::create(rewriter, loc, Value{start},
                                         emptyLike(rewriter, loc, type))
-                     .getResult(0);
+                     .result();
     auto reduce = linalg::ReduceOp::create(
         rewriter, loc, adaptor.getSrcs(), ValueRange{init},
         SmallVector<int64_t>{op.getAxis()},
