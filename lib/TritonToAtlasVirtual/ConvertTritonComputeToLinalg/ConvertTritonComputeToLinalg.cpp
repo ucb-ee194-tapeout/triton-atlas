@@ -65,8 +65,8 @@ struct DotToMatmul : OpConversionPattern<DotOp> {
       Type element = getElementTypeOrSelf(op.getType());
       Value zero = arith::ConstantOp::create(rewriter, loc, element,
                                              rewriter.getZeroAttr(element));
-      init = linalg::FillOp::create(rewriter, loc, Value{zero},
-                                    emptyLike(rewriter, loc, op.getType()))
+      init = linalg::FillOp::create(rewriter, loc, ValueRange{zero},
+                                    ValueRange{emptyLike(rewriter, loc, op.getType())})
                  .result();
     }
     // tt.dot's inputPrecision and maxNumImpreciseAcc are dropped: they choose
@@ -230,8 +230,9 @@ struct SplatToFill : OpConversionPattern<SplatOp> {
   matchAndRewrite(SplatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto fill = linalg::FillOp::create(rewriter, loc, Value{adaptor.getSrc()},
-                                       emptyLike(rewriter, loc, op.getType()));
+    auto fill = linalg::FillOp::create(
+        rewriter, loc, ValueRange{adaptor.getSrc()},
+        ValueRange{emptyLike(rewriter, loc, op.getType())});
     copyTags(op, fill);
     rewriter.replaceOp(op, fill->getResults());
     return success();
@@ -280,8 +281,8 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
       return rewriter.notifyMatchFailure(op, "no identity for this combine");
     Location loc = op.getLoc();
     Value start = arith::ConstantOp::create(rewriter, loc, identity);
-    Value init = linalg::FillOp::create(rewriter, loc, Value{start},
-                                        emptyLike(rewriter, loc, type))
+    Value init = linalg::FillOp::create(rewriter, loc, ValueRange{start},
+                                        ValueRange{emptyLike(rewriter, loc, type)})
                      .result();
     auto reduce = linalg::ReduceOp::create(
         rewriter, loc, adaptor.getSrcs(), ValueRange{init},
