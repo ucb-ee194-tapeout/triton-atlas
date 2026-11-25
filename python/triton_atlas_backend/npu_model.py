@@ -19,7 +19,7 @@ MODEL_REVISION = "337e9f249f938a1dff007ddf8a763e5cd4b3aa2b"
 
 
 def _tool(path, name):
-    found = shutil.which(str(path)) if not os.path.sep in str(path) else path
+    found = shutil.which(str(path)) if os.path.sep not in str(path) else path
     value = Path(found or path).expanduser().resolve()
     if not value.is_file() or not os.access(value, os.X_OK):
         raise RuntimeError(f"{name} is not executable: {value}")
