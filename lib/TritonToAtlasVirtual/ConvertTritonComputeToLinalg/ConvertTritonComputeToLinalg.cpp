@@ -82,7 +82,8 @@ linalg::MatmulOp makeMatmul(OpBuilder &builder, Location loc, Type result,
   assert(state.regions.size() == 1 && "linalg.matmul must have one region");
   Block *body = new Block();
   state.regions.front()->push_back(body);
-  for (Value operand : ValueRange{lhs, rhs, output})
+  SmallVector<Value> operands{lhs, rhs, output};
+  for (Value operand : operands)
     body->addArgument(getElementTypeOrSelf(operand.getType()), loc);
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToEnd(body);
