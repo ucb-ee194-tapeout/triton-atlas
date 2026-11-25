@@ -3,47 +3,168 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Atlas compiler explorer</title>
+  <title>Atlas / measured compiler run</title>
   <style>
-    :root { color-scheme: dark; --bg:#0b1020; --panel:#121a2d; --panel2:#17223b; --ink:#eef4ff; --muted:#9dafca; --line:#263655; --cyan:#62d8ff; --violet:#a78bfa; --green:#60e0aa; --amber:#f6c75a; }
-    * { box-sizing:border-box } body { margin:0; background:radial-gradient(circle at 15% 0,#1b3158 0,var(--bg) 42%); color:var(--ink); font:14px/1.45 Inter,ui-sans-serif,system-ui,sans-serif; }
-    header { display:flex; justify-content:space-between; align-items:center; padding:24px clamp(20px,4vw,64px); border-bottom:1px solid var(--line); }
-    h1 { margin:0; font-size:22px; letter-spacing:-.02em } .sub { color:var(--muted); margin-top:4px } .badge { padding:6px 10px; border:1px solid #2c755f; color:var(--green); border-radius:999px; font-weight:600; }
-    main { max-width:1500px; margin:auto; padding:26px clamp(20px,4vw,64px) 50px; } .controls { display:flex; gap:10px; align-items:center; margin-bottom:22px; flex-wrap:wrap; }
-    button { border:1px solid var(--line); border-radius:7px; background:var(--panel2); color:var(--ink); padding:8px 12px; cursor:pointer; font-weight:600; } button.primary { background:#176d89; border-color:#3ebce8 } button:disabled { opacity:.45; cursor:not-allowed }
-    .layout { display:grid; grid-template-columns:285px minmax(0,1fr) 315px; gap:18px; } .panel { background:linear-gradient(140deg,var(--panel),#0f172a); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
-    .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); padding:15px 16px; margin:0; border-bottom:1px solid var(--line); }
-    .passes { padding:10px } .pass { width:100%; display:flex; gap:10px; text-align:left; align-items:center; border:0; background:transparent; padding:11px; margin:2px 0; } .pass:hover,.pass.active { background:#1b2a49; } .pass.active { box-shadow:inset 3px 0 var(--cyan); } .num { color:var(--cyan); font:12px ui-monospace,monospace; width:24px; } .pass strong { display:block; } .pass span { display:block; color:var(--muted); font-size:12px; }
-    .stage { min-width:0; } .stagebar { display:flex; justify-content:space-between; padding:15px 18px; border-bottom:1px solid var(--line); } .stagebar strong { font-size:16px; } .stagebar small { color:var(--muted); } pre { margin:0; padding:20px; min-height:540px; overflow:auto; font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; color:#cfe8ff; } .hl { color:var(--cyan) }.op{color:var(--violet)}.type{color:var(--green)}.note{color:var(--amber)}
-    .tune { padding:14px 16px; } .metric { margin:9px 0 18px; } .metric label { display:flex; justify-content:space-between; color:var(--muted); margin-bottom:6px; } .bar { height:9px; border-radius:9px; background:#22304c; overflow:hidden; } .bar i { display:block; height:100%; background:linear-gradient(90deg,var(--cyan),var(--violet)); border-radius:inherit; transition:width .5s ease; }
-    .candidate { display:grid; grid-template-columns:1fr auto; padding:10px 0; border-top:1px solid var(--line); } .candidate small { color:var(--muted); display:block }.winner { color:var(--green); font-weight:700; } .event { padding:10px 0; border-top:1px solid var(--line); color:var(--muted); } .event b { color:var(--ink); }
-    footer { color:var(--muted); margin-top:18px; font-size:12px; } @media(max-width:980px){.layout{grid-template-columns:1fr}.stage{order:-1}pre{min-height:360px}}
+    :root {
+      --paper: #f4f3ef;
+      --paper-deep: #e9e8e3;
+      --ink: #16212b;
+      --muted: #69747c;
+      --line: #d5d6d1;
+      --blue: #1f607d;
+      --orange: #c65d39;
+      --green: #347254;
+      --green-soft: #dcebe0;
+      --navy: #172835;
+      --navy-2: #213846;
+      --white: #fffefa;
+      --shadow: 0 16px 38px rgba(22, 33, 43, .07);
+    }
+    * { box-sizing: border-box; }
+    html { background: var(--paper); }
+    body { margin: 0; color: var(--ink); background: var(--paper); font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid #8cc3d3; outline-offset: 2px; }
+    .shell { max-width: 1440px; margin: 0 auto; padding: 0 34px 54px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; min-height: 68px; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 11px; letter-spacing: .01em; font-weight: 750; }
+    .mark { width: 22px; height: 22px; display: grid; place-items: center; color: var(--white); background: var(--navy); font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .crumb { color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+    .top-meta { display: flex; align-items: center; gap: 18px; color: var(--muted); font-size: 12px; }
+    .state { display: inline-flex; align-items: center; gap: 7px; color: var(--green); font-weight: 700; }
+    .state i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(340px, .85fr); gap: 44px; padding: 62px 0 48px; align-items: end; }
+    .eyebrow { color: var(--orange); font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { max-width: 760px; margin: 13px 0 17px; font: 500 clamp(40px, 5.8vw, 78px)/.98 Georgia, "Times New Roman", serif; letter-spacing: -.055em; }
+    .lede { max-width: 620px; margin: 0; color: var(--muted); font-size: 17px; line-height: 1.55; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 25px; }
+    .chip { padding: 5px 9px; border: 1px solid var(--line); color: var(--muted); background: rgba(255,254,250,.62); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .hero-card { padding: 22px; border: 1px solid var(--line); background: var(--white); box-shadow: var(--shadow); }
+    .hero-card-label { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; }
+    .hero-card strong { display: block; margin-top: 10px; font: 500 39px/1 Georgia, "Times New Roman", serif; letter-spacing: -.04em; }
+    .hero-card p { margin: 7px 0 18px; color: var(--muted); }
+    .hero-rule { height: 1px; background: var(--line); }
+    .hero-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding-top: 18px; }
+    .hero-stats b { display: block; font: 700 18px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .hero-stats span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .example { display: grid; grid-template-columns: minmax(0, 1.22fr) minmax(290px, .78fr); gap: 16px; margin-bottom: 16px; }
+    .code-card, .tune-card, .panel { border: 1px solid var(--line); background: var(--white); box-shadow: 0 5px 18px rgba(22,33,43,.035); }
+    .card-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
+    .card-head h2 { margin: 0; font-size: 13px; letter-spacing: .02em; }
+    .card-head small { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .code-wrap { display: grid; grid-template-columns: 42px minmax(0, 1fr); overflow: auto; background: var(--navy); }
+    .lines, .code { margin: 0; padding: 22px 0; font: 13px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .lines { color: #718894; text-align: right; user-select: none; }.lines span { display: block; padding-right: 12px; }
+    .code { padding-left: 18px; padding-right: 24px; color: #d5e1e3; white-space: pre; }
+    .code .kw { color: #7dd1d2; }.code .fn { color: #f1c57a; }.code .type { color: #c3a9e8; }.code .comment { color: #7c939d; }.code .accent { color: #f29a76; }
+    .facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
+    .fact { padding: 14px 17px; background: var(--white); }.fact span { color: var(--muted); font-size: 11px; }.fact b { display: block; margin-top: 3px; font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .tune-card { padding-bottom: 14px; }.tune-card .card-head { border-bottom: 0; }
+    .winner { margin: 0 17px 17px; padding: 15px; background: var(--green-soft); border-left: 3px solid var(--green); }
+    .winner span { color: var(--green); font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .1em; text-transform: uppercase; }
+    .winner strong { display: block; margin-top: 6px; font-size: 18px; }.winner p { margin: 4px 0 0; color: #4d6657; font-size: 12px; }
+    .candidate { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; width: calc(100% - 34px); margin: 0 17px; padding: 13px 0; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+    .candidate:hover { color: var(--blue); }.candidate .name { font-weight: 700; }.candidate small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }.candidate .cycles { font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .track { height: 5px; margin-top: 8px; background: var(--paper-deep); }.track i { display: block; height: 100%; background: var(--blue); }
+    .lower { display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 16px; }
+    .panel-head { padding: 15px 18px; border-bottom: 1px solid var(--line); }.panel-head h2 { margin: 0; font-size: 13px; }.panel-head p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .pipeline { padding: 12px 16px 18px; }
+    .stage { position: relative; display: grid; grid-template-columns: 31px 1fr; gap: 10px; width: 100%; padding: 10px 8px 11px; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+    .stage:not(:last-child)::after { content: ""; position: absolute; left: 21px; top: 31px; bottom: -7px; width: 1px; background: var(--line); }
+    .stage:hover .stage-copy, .stage.active .stage-copy { color: var(--blue); }.stage.active .stage-copy strong { color: var(--ink); }.stage.active .stage-num { color: var(--white); background: var(--blue); border-color: var(--blue); }
+    .stage-num { z-index: 1; display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 50%; background: var(--white); color: var(--muted); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .stage-copy strong { display: block; font-size: 12px; }.stage-copy span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .detail { min-width: 0; }.detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) 240px; min-height: 390px; }.detail-code { margin: 0; padding: 22px; overflow: auto; background: #fbfaf6; color: #27343d; font: 12px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }.detail-note { padding: 22px 18px; border-left: 1px solid var(--line); }.detail-note h3 { margin: 0 0 12px; font-size: 12px; }.detail-note p { margin: 0 0 20px; color: var(--muted); font-size: 12px; }.detail-note ul { padding: 0; margin: 0; list-style: none; }.detail-note li { padding: 8px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }.detail-note li b { display: block; color: var(--ink); font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .runbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 16px; padding: 16px 18px; border: 1px solid var(--line); background: var(--navy); color: #d9e5e4; }.runbar code { overflow: auto; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }.runbar button { flex: 0 0 auto; padding: 8px 13px; border: 1px solid #5e8490; background: transparent; color: #e7f2ef; cursor: pointer; }.runbar button:hover { background: var(--navy-2); }
+    footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 22px; color: var(--muted); font-size: 11px; }.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    @media (max-width: 1040px) { .hero { grid-template-columns: 1fr; gap: 25px; }.example { grid-template-columns: 1fr; }.lower { grid-template-columns: 1fr; } }
+    @media (max-width: 700px) { .shell { padding: 0 17px 34px; }.top-meta .crumb { display: none; }.hero { padding: 42px 0 32px; }.hero-stats { grid-template-columns: 1fr; gap: 12px; }.detail-grid { grid-template-columns: 1fr; }.detail-note { border-left: 0; border-top: 1px solid var(--line); }.runbar { align-items: flex-start; flex-direction: column; }.runbar code { max-width: 100%; }.facts { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-<header><div><h1>Atlas compiler explorer</h1><div class="sub">Triton source → Atlas virtual program, with cycle-backed autotuning</div></div><div class="badge" id="status">DEMO DATA</div></header>
-<main>
-  <div class="controls"><button class="primary" id="play">▶ Play transformation</button><button id="prev">← Previous</button><button id="next">Next →</button><button id="tune">Run autotuner</button><span id="progress" class="sub"></span></div>
-  <div class="layout">
-    <section class="panel"><h2>Pass timeline</h2><div class="passes" id="passes"></div></section>
-    <section class="panel stage"><div class="stagebar"><div><strong id="title"></strong><br><small id="description"></small></div><small id="contract"></small></div><pre id="code"></pre></section>
-    <aside class="panel"><h2>Autotuning session</h2><div class="tune"><div class="metric"><label><span>Best simulated time</span><b id="cycles">—</b></label><div class="bar"><i id="meter" style="width:0"></i></div></div><div id="candidates"></div><h2 style="padding-left:0;border:0;margin-top:20px">Event log</h2><div id="events"></div></div></aside>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="mark">A</span><span>Atlas</span><span class="crumb">/ compiler lab / worked run</span></div>
+      <div class="top-meta"><span class="crumb">Triton → Atlas → model</span><span class="state"><i></i><span id="state">measured on BWRC</span></span></div>
+    </header>
+    <main>
+      <section class="hero">
+        <div><div class="eyebrow">Demo 01 · model-backed autotuning</div><h1>A Triton kernel, measured on Atlas.</h1><p class="lede">Three implementations of the same FP8 matmul + ReLU. The compiler heuristics lower every candidate; the execution-driven model decides which correct program is fastest.</p><div class="chips"><span class="chip">Triton 3.9.0</span><span class="chip">npu_model 337e9f2</span><span class="chip">RTL 0079c054</span><span class="chip">32 × 32 tile</span></div></div>
+        <aside class="hero-card"><span class="hero-card-label">selected candidate</span><strong id="hero-candidate">baseline</strong><p id="hero-copy">The smallest valid emitted program for this input.</p><div class="hero-rule"></div><div class="hero-stats"><div><b id="hero-cycles">3,342</b><span>simulated cycles</span></div><div><b>1,024 / 1,024</b><span>exact outputs</span></div><div><b>0</b><span>guard writes</span></div></div></aside>
+      </section>
+      <section class="example" aria-label="Worked kernel and candidate measurements">
+        <article class="code-card"><div class="card-head"><h2>Worked kernel</h2><small>test/from-jit/kernels.py</small></div><div class="code-wrap"><pre class="lines" aria-hidden="true"><span>01</span><span>02</span><span>03</span><span>04</span><span>05</span><span>06</span><span>07</span><span>08</span><span>09</span><span>10</span><span>11</span></pre><pre class="code"><span class="kw">@triton.jit</span>
+<span class="kw">def</span> <span class="fn">baseline</span>(A, B, C):
+    rows = tl.arange(0, 32)
+    cols = tl.arange(0, 32)
+    a = tl.load(A + rows[:, None] * 32 + cols[None, :])
+    b = tl.load(B + rows[:, None] * 32 + cols[None, :])
+    acc = tl.dot(a, b, tl.full((32, 32), 0.0, tl.float32))
+    acc = tl.maximum(acc, 0.0)
+    tl.store(C + rows[:, None] * 32 + cols[None, :], acc)
+<span class="comment"># ordinary Triton source; Atlas owns the lowering</span></pre></div><div class="facts"><div class="fact"><span>input</span><b>FP8 × FP8</b></div><div class="fact"><span>accumulator</span><b>BF16 / MXU0</b></div><div class="fact"><span>output</span><b>FP32 host view</b></div><div class="fact"><span>verification</span><b>bit-exact + guards</b></div></div></article>
+        <aside class="tune-card"><div class="card-head"><h2>Autotuning session</h2><small id="tune-state">3 candidates · complete</small></div><div class="winner"><span>selected</span><strong id="winner-name">baseline</strong><p id="winner-note">Lowest cycle count among correct candidates.</p></div><div id="candidates"></div></aside>
+      </section>
+      <section class="lower">
+        <aside class="panel"><div class="panel-head"><h2>Compiler path</h2><p>Click a stage to inspect the handoff.</p></div><div class="pipeline" id="pipeline"></div></aside>
+        <article class="panel detail"><div class="panel-head"><h2 id="detail-title">Source Triton</h2><p id="detail-subtitle">The starting point is ordinary user code.</p></div><div class="detail-grid"><pre class="detail-code" id="detail-code"></pre><aside class="detail-note"><h3 id="detail-contract">frontend input</h3><p id="detail-explanation"></p><ul id="detail-facts"></ul></aside></div></article>
+      </section>
+      <div class="runbar"><code>make demo.autotune</code><button id="play" type="button">Play compiler path</button><button id="tune" type="button">Replay measurements</button></div>
+    </main>
+    <footer><span>Atlas compiler explorer · a real model-backed run, presented as a small instrument.</span><span class="mono">demo/atlas-autotune</span></footer>
   </div>
-  <footer>For a live run, feed this view compiler stage dumps and the NPU-model cycle measurements. The demo preserves the same contracts: candidates compile independently, emitted instructions are model-verified, and the fastest valid result wins.</footer>
-</main>
-<script>
-const stages=[
- ['Source Triton','User writes an ordinary blocked kernel.','frontend input',`<span class="hl">@triton.jit</span>\ndef add(X, Y, <span class="note">BLOCK: tl.constexpr</span>):\n  i = tl.arange(0, BLOCK)\n  tl.store(Y + i, tl.load(X + i) + 1)`],
- ['TTIR','Triton frontend expresses vector operations and memory.','P1 input',`tt.func @add(%x: <span class="type">!tt.ptr&lt;bf16&gt;</span>, %y: <span class="type">!tt.ptr&lt;bf16&gt;</span>) {\n  %i = <span class="op">tt.make_range</span> ... : tensor&lt;32xi32&gt;\n  %v = <span class="op">tt.load</span> %x[...] : tensor&lt;32xbf16&gt;\n  %r = <span class="op">arith.addf</span> %v, %one\n  <span class="op">tt.store</span> %y[...], %r\n}`],
- ['P1 · validate','Reject forms Atlas cannot execute; preserve supported semantics.','validated TTIR',`<span class="note">✓ static shape 32</span>\n<span class="note">✓ bf16 boundary</span>\n<span class="note">✓ contiguous memory access</span>\n\nTTIR accepted`],
- ['P2 · normalize','Make canonical compute and address forms predictable.','normalized TTIR',`%ptr = <span class="op">tt.addptr</span> %base, %offsets\n%value = <span class="op">tt.load</span> %ptr\n%out = <span class="op">arith.addf</span> %value, %one`],
- ['P3 · compute → Linalg','Lower tensor arithmetic to structured compute.','Linalg + TTIR boundary',`%out = <span class="op">linalg.generic</span>\n  ins(%value : tensor&lt;32xbf16&gt;)\n  outs(%empty : tensor&lt;32xbf16&gt;) {\n  ^bb0(%x: bf16, %y: bf16):\n    %r = arith.addf %x, %one : bf16\n    linalg.yield %r : bf16\n  }`],
- ['P5 · dtype legalization','Choose Atlas compute representations.','legalized dtypes',`<span class="note">compute:</span> bf16\n<span class="note">host ABI:</span> bf16\n<span class="note">matmul operands:</span> fp8 when applicable`],
- ['P4 · pack + tile','Pack logical blocks into 32×32 Atlas tiles and unroll grids.','packed Linalg',`%packed = <span class="op">linalg.pack</span> %value ...\n%tile = <span class="op">linalg.generic</span> ... tensor&lt;1x1x32x32xbf16&gt;\n<span class="note">logical 32 lanes → one Atlas tile</span>`],
- ['P6 · assign slots','Give every boundary tile a deterministic DRAM slot.','slot-annotated IR',`%slot = <span class="type">#ttatlas.slot&lt;index=0, role=input_bf16&gt;</span>\n<span class="note">input window:</span> 0x90000000\n<span class="note">output window:</span> 0x90000800`],
- ['P7 · Atlas virtual','Emit the ordered Atlas instruction stream and manifest.','Atlas virtual IR',`<span class="op">atlas.start</span>\n<span class="op">atlas.dma_load</span> slot 0\n<span class="op">atlas.vpu_add</span> tile 0, constant 1\n<span class="op">atlas.dma_store</span> slot 0\n<span class="op">atlas.finish</span>`]
-];
-const config=[['BLOCK=16',1820],['BLOCK=32',1140],['BLOCK=64',1295]];let step=0,timer;
-const $=id=>document.getElementById(id);function render(){const s=stages[step];$('title').textContent=s[0];$('description').textContent=s[1];$('contract').textContent=s[2];$('code').innerHTML=s[3];$('progress').textContent=`Step ${step+1} / ${stages.length}`;$('passes').innerHTML=stages.map((x,i)=>`<button class="pass ${i===step?'active':''}" onclick="go(${i})"><b class="num">${String(i).padStart(2,'0')}</b><div><strong>${x[0]}</strong><span>${x[2]}</span></div></button>`).join('');$('prev').disabled=!step;$('next').disabled=step===stages.length-1}function go(i){step=i;render()}function autotune(){const win=Math.min(...config.map(x=>x[1]));$('cycles').textContent=win.toLocaleString()+' cycles';$('meter').style.width='100%';$('candidates').innerHTML=config.map(([name,c])=>`<div class="candidate"><div><b class="${c===win?'winner':''}">${name}${c===win?' · winner':''}</b><small>full compile → emit → NPU model</small></div><b>${c.toLocaleString()}</b></div>`).join('');$('events').innerHTML=['compile candidates','verify emitted words','run NPU model','cache BLOCK=32'].map((x,i)=>`<div class="event"><b>0${i+1}</b> · ${x}</div>`).join('');$('status').textContent='CYCLE-BACKED RESULT'}$('play').onclick=()=>{clearInterval(timer);step=0;render();timer=setInterval(()=>{if(step===stages.length-1){clearInterval(timer);autotune()}else go(step+1)},850)};$('prev').onclick=()=>go(step-1);$('next').onclick=()=>go(step+1);$('tune').onclick=autotune;render();
-</script>
-</body></html>
+  <script>
+    const candidates = [
+      { name: 'baseline', cycles: 3342, note: 'one MXU contraction + one ReLU', winner: true },
+      { name: 'redundant_relu', cycles: 3408, note: 'same math, one extra VPU max' },
+      { name: 'triple_relu', cycles: 3474, note: 'same math, two extra VPU maxes' }
+    ];
+    const stages = [
+      { title: 'Source Triton', contract: 'frontend input', subtitle: 'The starting point is ordinary user code.', explanation: 'The user supplies a static 32 × 32 tile kernel. No Atlas-specific syntax is required.', facts: [['input', '@triton.jit'], ['shape', '32 × 32'], ['source', 'Python / Triton']], code: '@triton.jit\ndef baseline(A, B, C):\n    rows = tl.arange(0, 32)\n    cols = tl.arange(0, 32)\n    acc = tl.dot(load(A), load(B))\n    tl.store(C, tl.maximum(acc, 0.0))' },
+      { title: 'TTIR', contract: 'Triton IR', subtitle: 'Triton expands the Python into typed tensor operations.', explanation: 'Loads, pointer arithmetic, the dot, and ReLU are visible before Atlas starts making hardware choices.', facts: [['values', 'tensor<32×32>'], ['dtypes', 'fp8 / fp32'], ['owner', 'Triton frontend']], code: 'tt.func @baseline(%A, %B, %C) {\n  %a = tt.load %A : tensor<32x32xf8>\n  %b = tt.load %B : tensor<32x32xf8>\n  %dot = tt.dot %a, %b : tensor<32x32xf32>\n  %relu = arith.maxnumf %dot, %zero\n  tt.store %C, %relu\n}' },
+      { title: 'P1 · validate', contract: 'validated TTIR', subtitle: 'Reject unsupported semantics early.', explanation: 'The contract keeps diagnostics close to the user code: static shapes, known dtypes, and analyzable memory accesses.', facts: [['shape', 'static ✓'], ['mask', 'rectangle ✓'], ['memory', 'contiguous ✓']], code: '✓ static rank-2 tensors\n✓ supported FP8 dot\n✓ analyzable pointer lanes\n✓ no runtime-dependent mask\n\nTTIR accepted' },
+      { title: 'P2 · normalize', contract: 'normalized TTIR', subtitle: 'Canonical forms make later analysis deterministic.', explanation: 'Address expressions and compute chains are simplified before structured lowering.', facts: [['purpose', 'canonical IR'], ['effect', 'fewer forms'], ['next', 'structured compute']], code: '%ptr = tt.addptr %base, %offsets\n%a = tt.load %ptr\n%b = tt.load %weight_ptr\n%dot = tt.dot %a, %b, %zero\n%relu = arith.maxnumf %dot, %zero' },
+      { title: 'P3 · compute → Linalg', contract: 'Linalg + TTIR boundary', subtitle: 'Tensor compute becomes structured operations.', explanation: 'This is where the pass-3 verifier matters: regions are built with valid terminators before the host MLIR verifier sees them.', facts: [['dot', 'linalg.matmul'], ['ReLU', 'linalg.max'], ['check', 'verified ✓']], code: '%dot = linalg.matmul\n  ins(%a, %b : tensor<32x32xf8>)\n  outs(%zero : tensor<32x32xf32>)\n%relu = linalg.max\n  ins(%dot, %zero : tensor<32x32xf32>)\n  outs(%empty : tensor<32x32xf32>)\n  linalg.yield %max' },
+      { title: 'P5 + P4 · legalize', contract: 'tile-legal IR', subtitle: 'Dtypes and shapes are made Atlas-shaped.', explanation: 'The logical operation is packed into the hardware’s 32 × 32 tile and its FP8/BF16 boundary policy.', facts: [['tile', '32 × 32'], ['MXU', 'MXU0'], ['policy', 'fp8-bf16-v1']], code: '%A_tile = linalg.pack %A into 32x32\n%B_tile = linalg.pack %B into 32x32\n%dot = linalg.matmul %A_tile, %B_tile\n\n# K padding, if needed, is explicit and zero-filled' },
+      { title: 'P6 + schedule', contract: 'scheduled virtual IR', subtitle: 'Heuristics place work against Atlas resources.', explanation: 'Virtual scheduling overlaps DMA with compute where legal, then inserts the waits and delays required by resource availability.', facts: [['DMA', 'queued + overlapped'], ['timing', 'npu-model rules'], ['result', 'ordered stream']], code: 'atlas.dma_load  slot 0\natlas.dma_load  slot 1\natlas.mxu_push  weight 0\natlas.mxu_matmul mxu0\natlas.vpu_max   tile 0\natlas.dma_store slot 2\n\n# delays and waits are inserted by the compiler' },
+      { title: 'P7 · emit + model', contract: 'measured program', subtitle: 'The winner is a real emitted program, not a heuristic estimate.', explanation: 'Each candidate is re-encoded, executed by the pinned model, checked for exact output and guards, then ranked by cycles.', facts: [['winner', 'baseline'], ['cycles', '3,342'], ['result', 'exact ✓']], code: 'program.schema       atlas.physical_program.v1\nselected_rtl         0079c054…\ntiming_provider      npu-model-rtl-match-v1\nword_count           51\n\nmodel: halted=true, runtime_errors=0' }
+    ];
+    const $ = id => document.getElementById(id);
+    let currentStage = 0;
+    let playback;
+    function renderCandidates() {
+      const slowest = Math.max(...candidates.map(c => c.cycles));
+      $('candidates').innerHTML = candidates.map((candidate, index) => `<button class="candidate" type="button" data-candidate="${index}"><span><span class="name">${candidate.name}${candidate.winner ? ' · winner' : ''}</span><small>${candidate.note}</small><span class="track"><i style="width:${Math.round(candidate.cycles / slowest * 100)}%"></i></span></span><span class="cycles">${candidate.cycles.toLocaleString()}</span></button>`).join('');
+      document.querySelectorAll('[data-candidate]').forEach(button => button.addEventListener('click', () => selectCandidate(Number(button.dataset.candidate))));
+    }
+    function selectCandidate(index) {
+      const candidate = candidates[index];
+      $('hero-candidate').textContent = candidate.name;
+      $('hero-cycles').textContent = candidate.cycles.toLocaleString();
+      $('hero-copy').textContent = candidate.winner ? 'The fastest valid emitted program for this input.' : 'A correct alternative; the model measured a longer schedule.';
+      $('winner-name').textContent = candidate.name;
+      $('winner-note').textContent = `${candidate.cycles.toLocaleString()} cycles · ${candidate.note}`;
+    }
+    function renderStage() {
+      const stage = stages[currentStage];
+      $('detail-title').textContent = stage.title;
+      $('detail-subtitle').textContent = stage.subtitle;
+      $('detail-contract').textContent = stage.contract;
+      $('detail-explanation').textContent = stage.explanation;
+      $('detail-code').textContent = stage.code;
+      $('detail-facts').innerHTML = stage.facts.map(([label, value]) => `<li><b>${label}</b>${value}</li>`).join('');
+      $('pipeline').innerHTML = stages.map((item, index) => `<button class="stage ${index === currentStage ? 'active' : ''}" type="button" data-stage="${index}"><span class="stage-num">${String(index + 1).padStart(2, '0')}</span><span class="stage-copy"><strong>${item.title}</strong><span>${item.contract}</span></span></button>`).join('');
+      document.querySelectorAll('[data-stage]').forEach(button => button.addEventListener('click', () => { currentStage = Number(button.dataset.stage); renderStage(); }));
+    }
+    function playPath() {
+      clearInterval(playback); currentStage = 0; renderStage(); $('state').textContent = 'walking the compiler path'; $('play').textContent = 'Playing…';
+      playback = setInterval(() => { if (currentStage === stages.length - 1) { clearInterval(playback); $('play').textContent = 'Play compiler path'; $('state').textContent = 'measured on BWRC'; return; } currentStage += 1; renderStage(); }, 720);
+    }
+    function replayTune() {
+      $('state').textContent = 'measuring candidates'; $('tune-state').textContent = 'measuring…';
+      setTimeout(() => { $('state').textContent = 'measured on BWRC'; $('tune-state').textContent = '3 candidates · complete'; selectCandidate(0); }, 1250);
+    }
+    $('play').addEventListener('click', playPath); $('tune').addEventListener('click', replayTune); renderCandidates(); renderStage(); selectCandidate(0);
+  </script>
+</body>
+</html>
