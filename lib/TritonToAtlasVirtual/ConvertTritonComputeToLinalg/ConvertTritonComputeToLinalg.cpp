@@ -47,6 +47,30 @@ Value emptyLike(OpBuilder &builder, Location loc, Type type) {
                                  tensor.getElementType());
 }
 
+// Build a tensor linalg.fill and make its structured-op body explicit.  Recent
+// MLIR FillOp builders normally materialize this body through
+// buildStructuredOp, but the MLIR library loaded with Triton's Python runtime
+// may leave the declared region without a block.  An empty region is invalid
+// (and fails verification before later Atlas passes can run).  Keeping this
+// here makes the pass independent of that builder/runtime mismatch while
+// preserving the standard linalg.fill semantics.
+linalg::FillOp makeFill(OpBuilder &builder, Location loc, Value value,
+                        Value output) {
+  auto fill = linalg::FillOp::create(builder, loc, ValueRange{value},
+                                     ValueRange{output});
+  if (!fill.getRegion().empty())
+    return fill;
+
+  Block *body = new Block();
+  fill.getRegion().push_back(body);
+  body->addArgument(value.getType(), loc);
+  body->addArgument(getElementTypeOrSelf(output.getType()), loc);
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToEnd(body);
+  linalg::YieldOp::create(builder, loc, body->getArgument(0));
+  return fill;
+}
+
 // tt.dot -> linalg.matmul. A dot that starts from zero gets linalg.fill zero
 // as its output; a later step of a K chain accumulates onto the previous
 // step's matmul, which links the chain pass 2 tagged into one
@@ -65,8 +89,8 @@ struct DotToMatmul : OpConversionPattern<DotOp> {
       Type element = getElementTypeOrSelf(op.getType());
       Value zero = arith::ConstantOp::create(rewriter, loc, element,
                                              rewriter.getZeroAttr(element));
-      init = linalg::FillOp::create(rewriter, loc, ValueRange{zero},
-                                    ValueRange{emptyLike(rewriter, loc, op.getType())})
+      init = makeFill(rewriter, loc, zero,
+                      emptyLike(rewriter, loc, op.getType()))
                  .result();
     }
     // tt.dot's inputPrecision and maxNumImpreciseAcc are dropped: they choose
@@ -230,9 +254,8 @@ struct SplatToFill : OpConversionPattern<SplatOp> {
   matchAndRewrite(SplatOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
-    auto fill = linalg::FillOp::create(
-        rewriter, loc, ValueRange{adaptor.getSrc()},
-        ValueRange{emptyLike(rewriter, loc, op.getType())});
+    auto fill = makeFill(rewriter, loc, adaptor.getSrc(),
+                         emptyLike(rewriter, loc, op.getType()));
     copyTags(op, fill);
     rewriter.replaceOp(op, fill->getResults());
     return success();
@@ -281,8 +304,8 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
       return rewriter.notifyMatchFailure(op, "no identity for this combine");
     Location loc = op.getLoc();
     Value start = arith::ConstantOp::create(rewriter, loc, identity);
-    Value init = linalg::FillOp::create(rewriter, loc, ValueRange{start},
-                                        ValueRange{emptyLike(rewriter, loc, type)})
+    Value init = makeFill(rewriter, loc, start,
+                          emptyLike(rewriter, loc, type))
                      .result();
     auto reduce = linalg::ReduceOp::create(
         rewriter, loc, adaptor.getSrcs(), ValueRange{init},
