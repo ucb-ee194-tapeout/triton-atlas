@@ -365,6 +365,90 @@ bool isFloatElementwise(Operation *op) {
                       isFloatTensor);
 }
 
+bool isScalarElementwiseType(Type type) {
+  return isa<IntegerType, FloatType, IndexType, ComplexType>(type);
+}
+
+// The upstream elementwise-to-linalg pattern calls GenericOp::create, which
+// inserts the op before its body builder runs.  With the MLIR implementation
+// supplied by Triton's runtime, that fails verification on an empty region.
+// Build the exact same identity-mapped generic while detached, populate its
+// scalar body, and only then insert it.
+struct ElementwiseToLinalgGeneric : ConversionPattern {
+  ElementwiseToLinalgGeneric(MLIRContext *context)
+      : ConversionPattern(MatchAnyOpTypeTag(), /*benefit=*/1, context) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, ArrayRef<Value> operands,
+      ConversionPatternRewriter &rewriter) const override {
+    if (!isFloatElementwise(op) || op->getNumResults() == 0)
+      return failure();
+    auto result = dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    if (!result)
+      return failure();
+    const int64_t rank = result.getRank();
+    for (Type type : op->getResultTypes())
+      if (!isa<RankedTensorType>(type))
+        return failure();
+
+    AffineMap scalarMap = AffineMap::get(rank, /*symbolCount=*/0, {},
+                                         rewriter.getContext());
+    AffineMap identityMap = rewriter.getMultiDimIdentityMap(rank);
+    SmallVector<AffineMap> indexingMaps;
+    indexingMaps.reserve(operands.size() + op->getNumResults());
+    for (Type type : op->getOperandTypes()) {
+      if (isScalarElementwiseType(type))
+        indexingMaps.push_back(scalarMap);
+      else if (isa<RankedTensorType>(type))
+        indexingMaps.push_back(identityMap);
+      else
+        return failure();
+    }
+    indexingMaps.append(op->getNumResults(), identityMap);
+
+    SmallVector<Value> outputs;
+    outputs.reserve(op->getNumResults());
+    for (Type type : op->getResultTypes())
+      outputs.push_back(emptyLike(rewriter, op->getLoc(), type));
+    SmallVector<Attribute> iteratorAttrs;
+    iteratorAttrs.assign(
+        rank, linalg::IteratorTypeAttr::get(rewriter.getContext(),
+                                             utils::IteratorType::parallel));
+
+    OperationState state(op->getLoc(), linalg::GenericOp::getOperationName());
+    linalg::GenericOp::build(
+        rewriter, state, op->getResultTypes(), operands, outputs,
+        rewriter.getAffineMapArrayAttr(indexingMaps),
+        rewriter.getArrayAttr(iteratorAttrs), /*doc=*/nullptr,
+        /*libraryCall=*/nullptr);
+    assert(state.regions.size() == 1 && "linalg.generic must have one region");
+    Block *body = new Block();
+    state.regions.front()->push_back(body);
+    for (Value operand : operands)
+      body->addArgument(getElementTypeOrSelf(operand.getType()), op->getLoc());
+    for (Value output : outputs)
+      body->addArgument(getElementTypeOrSelf(output.getType()), op->getLoc());
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToEnd(body);
+    SmallVector<Value> scalarArgs;
+    scalarArgs.append(body->getArguments().begin(),
+                      body->getArguments().begin() + operands.size());
+    SmallVector<Type> scalarResultTypes;
+    for (Type type : op->getResultTypes())
+      scalarResultTypes.push_back(getElementTypeOrSelf(type));
+    Operation *scalarOp = rewriter.create(op->getLoc(), op->getName(),
+                                           scalarArgs, scalarResultTypes,
+                                           op->getAttrs());
+    linalg::YieldOp::create(rewriter, op->getLoc(), scalarOp->getResults());
+
+    auto generic = cast<linalg::GenericOp>(rewriter.create(state));
+    copyTags(op, generic);
+    rewriter.replaceOp(op, generic->getResults());
+    return success();
+  }
+};
+
 // Upstream's elementwise patterns reuse an operand as the generic's output
 // when the body ignores it. Tile-and-fuse then duplicates that operand's
 // producer (32 matmuls instead of 8 on a 64x64 MLP), so each such output
@@ -496,7 +580,7 @@ struct ConvertTritonComputeToLinalg
     // Ahead of upstream's patterns, which would match tt.fp_to_fp too (it is
     // elementwise) and put it, unconverted, into a generic's body.
     patterns.add<FpToFpToArith>(context, /*benefit=*/2);
-    linalg::populateElementwiseToLinalgConversionPatterns(patterns);
+    patterns.add<ElementwiseToLinalgGeneric>(context);
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
       return signalPassFailure();
