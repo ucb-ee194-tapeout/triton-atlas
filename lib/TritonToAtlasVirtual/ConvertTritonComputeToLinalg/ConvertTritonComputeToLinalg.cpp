@@ -431,8 +431,11 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
         rewriter.getArrayAttr(iteratorAttrs), /*doc=*/nullptr,
         /*libraryCall=*/nullptr);
     assert(state.regions.size() == 1 && "linalg.generic must have one region");
-    Block *body = new Block();
-    state.regions.front()->push_back(body);
+    // Keep the body owned by the detached region.  In particular, use the
+    // region's block factory rather than allocating a block and attaching it
+    // separately: the MLIR runtime used by Triton's Python extension copies
+    // OperationState regions during creation and otherwise drops that block.
+    Block *body = state.regions.front()->emplaceBlock();
     for (Value operand : operands)
       body->addArgument(getElementTypeOrSelf(operand.getType()), op->getLoc());
     for (Value output : outputs)
@@ -454,7 +457,12 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
     yieldState.addOperands(scalarOp->getResults());
     body->push_back(Operation::create(yieldState));
 
-    auto generic = cast<linalg::GenericOp>(rewriter.create(state));
+    // Create the operation while detached, then insert that already-populated
+    // operation through the rewriter.  ConversionPatternRewriter::create can
+    // rebuild the state through the generated builder; that builder only adds
+    // the region declaration and loses the detached body on this runtime.
+    Operation *genericOperation = Operation::create(state);
+    auto generic = cast<linalg::GenericOp>(rewriter.insert(genericOperation));
     copyTags(op, generic);
     rewriter.replaceOp(op, generic->getResults());
     return success();
