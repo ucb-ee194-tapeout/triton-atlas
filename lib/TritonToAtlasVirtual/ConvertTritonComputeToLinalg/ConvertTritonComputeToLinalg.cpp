@@ -438,20 +438,21 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
     for (Value output : outputs)
       body->addArgument(getElementTypeOrSelf(output.getType()), op->getLoc());
 
-    {
-      OpBuilder bodyBuilder(rewriter.getContext());
-      bodyBuilder.setInsertionPointToEnd(body);
-      SmallVector<Value> scalarArgs;
-      scalarArgs.append(body->getArguments().begin(),
-                        body->getArguments().begin() + operands.size());
-      SmallVector<Type> scalarResultTypes;
-      for (Type type : op->getResultTypes())
-        scalarResultTypes.push_back(getElementTypeOrSelf(type));
-      Operation *scalarOp = bodyBuilder.create(
-          op->getLoc(), bodyBuilder.getStringAttr(op->getName().getStringRef()),
-          scalarArgs, scalarResultTypes, op->getAttrs());
-      linalg::YieldOp::create(bodyBuilder, op->getLoc(), scalarOp->getResults());
-    }
+    SmallVector<Value> scalarArgs;
+    scalarArgs.append(body->getArguments().begin(),
+                      body->getArguments().begin() + operands.size());
+    SmallVector<Type> scalarResultTypes;
+    for (Type type : op->getResultTypes())
+      scalarResultTypes.push_back(getElementTypeOrSelf(type));
+    OperationState scalarState(op->getLoc(), op->getName().getStringRef());
+    scalarState.addOperands(scalarArgs);
+    scalarState.addTypes(scalarResultTypes);
+    scalarState.addAttributes(op->getAttrs());
+    Operation *scalarOp = Operation::create(scalarState);
+    body->push_back(scalarOp);
+    OperationState yieldState(op->getLoc(), linalg::YieldOp::getOperationName());
+    yieldState.addOperands(scalarOp->getResults());
+    body->push_back(Operation::create(yieldState));
 
     auto generic = cast<linalg::GenericOp>(rewriter.create(state));
     copyTags(op, generic);
