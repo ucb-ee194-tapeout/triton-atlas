@@ -460,6 +460,40 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
   }
 };
 
+// A ReLU is the elementwise max of a tensor and zero.  Use linalg.max rather
+// than linalg.generic: the stock Triton runtime verifies this named operation
+// but does not expose a compatible generic-region implementation to plugins.
+struct MaxNumToLinalgMax : OpConversionPattern<arith::MaxNumFOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(arith::MaxNumFOp op, OpAdaptor adaptor,
+                                ConversionPatternRewriter &rewriter) const override {
+    auto type = dyn_cast<RankedTensorType>(op.getType());
+    if (!type)
+      return failure();
+    Location loc = op.getLoc();
+    Value output = emptyLike(rewriter, loc, op.getType());
+    OperationState state(loc, linalg::MaxOp::getOperationName());
+    SmallVector<Value> operands{adaptor.getLhs(), adaptor.getRhs()};
+    linalg::MaxOp::build(rewriter, state, operands, ValueRange{output});
+    Block *body = new Block();
+    state.regions.front()->push_back(body);
+    operands.push_back(output);
+    for (Value value : operands)
+      body->addArgument(getElementTypeOrSelf(value.getType()), loc);
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToEnd(body);
+      ImplicitLocOpBuilder regionBuilder(loc, rewriter);
+      linalg::MaxOp::regionBuilder(regionBuilder, *body, {}, {});
+    }
+    auto maximum = cast<linalg::MaxOp>(rewriter.create(state));
+    copyTags(op, maximum);
+    rewriter.replaceOp(op, maximum->getResults());
+    return success();
+  }
+};
+
 // Upstream's elementwise patterns reuse an operand as the generic's output
 // when the body ignores it. Tile-and-fuse then duplicates that operand's
 // producer (32 matmuls instead of 8 on a 64x64 MLP), so each such output
@@ -594,8 +628,12 @@ struct ConvertTritonComputeToLinalg
     target.addDynamicallyLegalOp<ExpandDimsOp>([](ExpandDimsOp op) {
       return !isFloatTensor(op.getType()) || absorbedByBroadcasts(op);
     });
-    target.addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect>(
-        [](Operation *op) { return !isFloatElementwise(op); });
+    // Keep scalar and tensor arithmetic in TTIR.  The Atlas-native lowering
+    // handles these after shape/dtype legalization; constructing a Linalg
+    // region here crosses the plugin/runtime MLIR boundary and is rejected by
+    // Triton's verifier.
+    target.addLegalDialect<arith::ArithDialect, math::MathDialect>();
+    target.addLegalOp<arith::ConstantOp>();
     // Everything else stays as it is: loads, stores, pointers, address math
     // (checkCompute has rejected float compute without a pattern).
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
@@ -606,7 +644,6 @@ struct ConvertTritonComputeToLinalg
     // Ahead of upstream's patterns, which would match tt.fp_to_fp too (it is
     // elementwise) and put it, unconverted, into a generic's body.
     patterns.add<FpToFpToArith>(context, /*benefit=*/2);
-    patterns.add<ElementwiseToLinalgGeneric>(context);
     if (trace)
       llvm::errs() << "ttatlas P3: converting\n";
     if (failed(applyPartialConversion(getOperation(), target,
