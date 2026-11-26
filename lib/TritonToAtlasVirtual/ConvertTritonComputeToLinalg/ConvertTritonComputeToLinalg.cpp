@@ -458,7 +458,13 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
     {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToEnd(body);
-      linalg::YieldOp::create(rewriter, op->getLoc(), scalarOp->getResults());
+      auto yield = linalg::YieldOp::create(rewriter, op->getLoc(),
+                                           scalarOp->getResults());
+      if (std::getenv("TTATLAS_TRACE_P3"))
+        llvm::errs() << "ttatlas P3 yield registered="
+                     << yield->getName().isRegistered()
+                     << " terminator="
+                     << yield->mightHaveTrait<OpTrait::IsTerminator>() << "\n";
     }
 
     if (std::getenv("TTATLAS_TRACE_P3"))
