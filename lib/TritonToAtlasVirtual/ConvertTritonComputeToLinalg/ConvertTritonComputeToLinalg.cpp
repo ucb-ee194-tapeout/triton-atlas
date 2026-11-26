@@ -442,6 +442,13 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
           scalarState.addAttributes(op->getAttrs());
           Operation *scalarOp = Operation::create(scalarState);
           bodyBuilder.insert(scalarOp);
+          if (std::getenv("TTATLAS_TRACE_P3")) {
+            OperationName yieldName(linalg::YieldOp::getOperationName(),
+                                    bodyBuilder.getContext());
+            llvm::errs() << "ttatlas P3 yield registered="
+                         << yieldName.isRegistered() << " terminator="
+                         << yieldName.hasTrait<OpTrait::IsTerminator>() << "\n";
+          }
         });
     assert(state.regions.size() == 1 && "linalg.generic must have one region");
     // Create the operation only after the structured builder has populated the
