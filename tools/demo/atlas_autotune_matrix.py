@@ -163,7 +163,8 @@ def _validator(workload: Workload):
                 raise ValueError(
                     f"output argument {arg} differs from the reference; "
                     f"first_diff_byte={first_diff}; "
-                    f"actual[:32]={actual[:32].hex()} expected[:32]={expected[:32].hex()}"
+                    f"actual_window={actual[max(0, first_diff - 8):first_diff + 8].hex()} "
+                    f"expected_window={expected[max(0, first_diff - 8):first_diff + 8].hex()}"
                 )
         output_end = output_base - model_base + 2048 * len(manifest["outputs"])
         if any(byte != 0xA5 for byte in memory[:input_base - model_base]):
