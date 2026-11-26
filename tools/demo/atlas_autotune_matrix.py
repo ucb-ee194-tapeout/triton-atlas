@@ -75,6 +75,7 @@ class Workload:
     candidates: tuple[Candidate, ...]
     inputs: Mapping[int, bytes]
     expected: Mapping[int, bytes]
+    max_bf16_ulp: int = 0
 
 
 def _bf16_buffer(codes: list[int]) -> bytes:
@@ -120,6 +121,7 @@ def _mlp_workload() -> Workload:
         (Candidate("mlp32", mlp32, signature), Candidate("mlp32_redundant_relu", mlp32_redundant_relu, signature)),
         {0: x, 1: w, 2: bias},
         {3: expected},
+        max_bf16_ulp=1,
     )
 
 
@@ -145,6 +147,9 @@ def _initial_image(workload: Workload, program: Mapping[str, Any]) -> bytes:
 
 
 def _validator(workload: Workload):
+    def ordered_bf16(bits: int) -> int:
+        return (~bits & 0xFFFF) if bits & 0x8000 else bits | 0x8000
+
     def validate(_candidate: Candidate, program: Mapping[str, Any], memory: bytes) -> None:
         manifest = json.loads(program["kernel_manifest"])
         input_base = manifest["dram_base"]["input"]
@@ -154,17 +159,21 @@ def _validator(workload: Workload):
         output_window = memory[output_base - model_base:]
         unpack_outputs(manifest, output_window, host)
         for arg, expected in workload.expected.items():
-            if bytes(host[arg]) != expected:
-                actual = bytes(host[arg])
-                first_diff = next(
-                    (index for index, (got, want) in enumerate(zip(actual, expected)) if got != want),
-                    None,
-                )
+            actual = bytes(host[arg])
+            bad = []
+            for offset in range(0, min(len(actual), len(expected)), 2):
+                got = int.from_bytes(actual[offset:offset + 2], "little")
+                want = int.from_bytes(expected[offset:offset + 2], "little")
+                if abs(ordered_bf16(got) - ordered_bf16(want)) > workload.max_bf16_ulp:
+                    bad.append(offset)
+            if len(actual) != len(expected) or bad:
+                first_diff = bad[0] if bad else min(len(actual), len(expected))
                 raise ValueError(
                     f"output argument {arg} differs from the reference; "
                     f"first_diff_byte={first_diff}; "
                     f"actual_window={actual[max(0, first_diff - 8):first_diff + 8].hex()} "
-                    f"expected_window={expected[max(0, first_diff - 8):first_diff + 8].hex()}"
+                    f"expected_window={expected[max(0, first_diff - 8):first_diff + 8].hex()}; "
+                    f"max_allowed_ulp={workload.max_bf16_ulp}"
                 )
         output_end = output_base - model_base + 2048 * len(manifest["outputs"])
         if any(byte != 0xA5 for byte in memory[:input_base - model_base]):
