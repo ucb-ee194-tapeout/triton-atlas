@@ -435,7 +435,7 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
     // region's block factory rather than allocating a block and attaching it
     // separately: the MLIR runtime used by Triton's Python extension copies
     // OperationState regions during creation and otherwise drops that block.
-    Block *body = state.regions.front()->emplaceBlock();
+    Block *body = &state.regions.front()->emplaceBlock();
     for (Value operand : operands)
       body->addArgument(getElementTypeOrSelf(operand.getType()), op->getLoc());
     for (Value output : outputs)
