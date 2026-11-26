@@ -628,12 +628,8 @@ struct ConvertTritonComputeToLinalg
     target.addDynamicallyLegalOp<ExpandDimsOp>([](ExpandDimsOp op) {
       return !isFloatTensor(op.getType()) || absorbedByBroadcasts(op);
     });
-    // Keep scalar and tensor arithmetic in TTIR.  The Atlas-native lowering
-    // handles these after shape/dtype legalization; constructing a Linalg
-    // region here crosses the plugin/runtime MLIR boundary and is rejected by
-    // Triton's verifier.
-    target.addLegalDialect<arith::ArithDialect, math::MathDialect>();
-    target.addLegalOp<arith::ConstantOp>();
+    target.addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect>(
+        [](Operation *op) { return !isFloatElementwise(op); });
     // Everything else stays as it is: loads, stores, pointers, address math
     // (checkCompute has rejected float compute without a pattern).
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
@@ -644,6 +640,7 @@ struct ConvertTritonComputeToLinalg
     // Ahead of upstream's patterns, which would match tt.fp_to_fp too (it is
     // elementwise) and put it, unconverted, into a generic's body.
     patterns.add<FpToFpToArith>(context, /*benefit=*/2);
+    patterns.add<ElementwiseToLinalgGeneric>(context);
     if (trace)
       llvm::errs() << "ttatlas P3: converting\n";
     if (failed(applyPartialConversion(getOperation(), target,
