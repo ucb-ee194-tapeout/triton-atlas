@@ -64,8 +64,10 @@ linalg::FillOp makeFill(OpBuilder &builder, Location loc, Value value,
   OperationState state(loc, linalg::FillOp::getOperationName());
   linalg::FillOp::build(builder, state, ValueRange{value}, ValueRange{output});
   assert(state.regions.size() == 1 && "linalg.fill must have one region");
-  Block *body = new Block();
-  state.regions.front()->push_back(body);
+  auto fillOperation = Operation::create(state);
+  auto fill = cast<linalg::FillOp>(fillOperation);
+  Region &region = fill->getRegion(0);
+  Block *body = region.empty() ? &region.emplaceBlock() : &region.front();
   body->addArgument(value.getType(), loc);
   body->addArgument(getElementTypeOrSelf(output.getType()), loc);
   {
@@ -73,7 +75,7 @@ linalg::FillOp makeFill(OpBuilder &builder, Location loc, Value value,
     builder.setInsertionPointToEnd(body);
     linalg::YieldOp::create(builder, loc, body->getArgument(0));
   }
-  return cast<linalg::FillOp>(builder.create(state));
+  return cast<linalg::FillOp>(builder.insert(fillOperation));
 }
 
 // See makeFill: construct the linalg.matmul region before inserting the
@@ -85,8 +87,10 @@ linalg::MatmulOp makeMatmul(OpBuilder &builder, Location loc, Type result,
   linalg::MatmulOp::build(builder, state, TypeRange{result},
                           ValueRange{lhs, rhs}, ValueRange{output});
   assert(state.regions.size() == 1 && "linalg.matmul must have one region");
-  Block *body = new Block();
-  state.regions.front()->push_back(body);
+  auto matmulOperation = Operation::create(state);
+  auto matmul = cast<linalg::MatmulOp>(matmulOperation);
+  Region &region = matmul->getRegion(0);
+  Block *body = region.empty() ? &region.emplaceBlock() : &region.front();
   SmallVector<Value> operands{lhs, rhs, output};
   for (Value operand : operands)
     body->addArgument(getElementTypeOrSelf(operand.getType()), loc);
@@ -96,7 +100,7 @@ linalg::MatmulOp makeMatmul(OpBuilder &builder, Location loc, Type result,
     ImplicitLocOpBuilder regionBuilder(loc, builder);
     linalg::MatmulOp::regionBuilder(regionBuilder, *body, {}, {});
   }
-  return cast<linalg::MatmulOp>(builder.create(state));
+  return cast<linalg::MatmulOp>(builder.insert(matmulOperation));
 }
 
 // tt.dot -> linalg.matmul. A dot that starts from zero gets linalg.fill zero
@@ -505,8 +509,10 @@ struct MaxNumToLinalgMax : OpConversionPattern<arith::MaxNumFOp> {
     OperationState state(loc, linalg::MaxOp::getOperationName());
     SmallVector<Value> operands{adaptor.getLhs(), adaptor.getRhs()};
     linalg::MaxOp::build(rewriter, state, operands, ValueRange{output});
-    Block *body = new Block();
-    state.regions.front()->push_back(body);
+    auto maxOperation = Operation::create(state);
+    auto maximum = cast<linalg::MaxOp>(maxOperation);
+    Region &region = maximum->getRegion(0);
+    Block *body = region.empty() ? &region.emplaceBlock() : &region.front();
     operands.push_back(output);
     for (Value value : operands)
       body->addArgument(getElementTypeOrSelf(value.getType()), loc);
@@ -516,7 +522,7 @@ struct MaxNumToLinalgMax : OpConversionPattern<arith::MaxNumFOp> {
       ImplicitLocOpBuilder regionBuilder(loc, rewriter);
       linalg::MaxOp::regionBuilder(regionBuilder, *body, {}, {});
     }
-    auto maximum = cast<linalg::MaxOp>(rewriter.create(state));
+    rewriter.insert(maxOperation);
     copyTags(op, maximum);
     rewriter.replaceOp(op, maximum->getResults());
     return success();
