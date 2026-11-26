@@ -115,6 +115,28 @@ def softmax16_reassociated(X, Y):
 
 
 @triton.jit
+def softmax32(X, Y):
+    rows = tl.arange(0, 32)
+    cols = tl.arange(0, 32)
+    off = rows[:, None] * 32 + cols[None, :]
+    x = tl.load(X + off).to(tl.float32)
+    exponent = tl.exp(x - tl.max(x, axis=1)[:, None])
+    probability = exponent * (1.0 / tl.sum(exponent, axis=1))[:, None]
+    tl.store(Y + off, probability.to(tl.bfloat16))
+
+
+@triton.jit
+def softmax32_reassociated(X, Y):
+    rows = tl.arange(0, 32)
+    cols = tl.arange(0, 32)
+    off = rows[:, None] * 32 + cols[None, :]
+    x = tl.load(X + off).to(tl.float32)
+    exponent = tl.exp(x - tl.max(x, axis=1)[:, None])
+    probability = exponent * (1.0 / tl.sum(exponent, axis=1))[:, None]
+    tl.store(Y + off, (probability + 0.0).to(tl.bfloat16))
+
+
+@triton.jit
 def exp16(X, Y):
     rows = tl.arange(0, 16)
     cols = tl.arange(0, 16)
@@ -248,6 +270,29 @@ def _softmax_workload() -> Workload:
     )
 
 
+def _softmax32_workload() -> Workload:
+    values = [0x0000, 0x3D80, 0xBD80, 0x3E80] * 256
+    source = _bf16_buffer(values)
+    expected = []
+    for row in range(32):
+        row_values = [float(bf16(values[row * 32 + col])) for col in range(32)]
+        maximum = max(row_values)
+        exponent = [math.exp(value - maximum) for value in row_values]
+        denominator = sum(exponent)
+        expected.extend(round_bf16(value / denominator) for value in exponent)
+    signature = {"X": "*bf16", "Y": "*bf16"}
+    return Workload(
+        "softmax32",
+        (
+            Candidate("softmax32", softmax32, signature),
+            Candidate("softmax32_reassociated", softmax32_reassociated, signature),
+        ),
+        {0: source},
+        {1: _bf16_buffer(expected)},
+        max_bf16_ulp=2,
+    )
+
+
 def _exp_workload() -> Workload:
     values = [0x0000, 0x3D80, 0xBD80, 0x3E80] * 64
     source = _bf16_buffer(values)
@@ -348,6 +393,7 @@ def main() -> int:
         _mlp_workload(),
         _row_reduce_workload(),
         _softmax_workload(),
+        _softmax32_workload(),
         _exp_workload(),
         _recip_workload(),
     )
