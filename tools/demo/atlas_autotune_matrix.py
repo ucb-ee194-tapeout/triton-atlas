@@ -156,8 +156,13 @@ def _validator(workload: Workload):
         for arg, expected in workload.expected.items():
             if bytes(host[arg]) != expected:
                 actual = bytes(host[arg])
+                first_diff = next(
+                    (index for index, (got, want) in enumerate(zip(actual, expected)) if got != want),
+                    None,
+                )
                 raise ValueError(
                     f"output argument {arg} differs from the reference; "
+                    f"first_diff_byte={first_diff}; "
                     f"actual[:32]={actual[:32].hex()} expected[:32]={expected[:32].hex()}"
                 )
         output_end = output_base - model_base + 2048 * len(manifest["outputs"])
