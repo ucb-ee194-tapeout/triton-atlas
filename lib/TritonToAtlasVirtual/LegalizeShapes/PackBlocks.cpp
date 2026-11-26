@@ -23,11 +23,11 @@ namespace {
 
 constexpr int64_t kTile = ttatlas::target::kTileSize;
 
-// BF16 raw bits: the top and bottom of the device's min/max order (a NaN each
-// way, so a lane inside the Triton block passes through min and max
-// unchanged), and the infinities, the identities of max and min.
-constexpr uint16_t kClampHigh = 0x7FFF;
-constexpr uint16_t kClampLow = 0xFFFF;
+// BF16 raw bits for finite-safe clamp bounds.  Using +inf/-inf as the
+// in-block identities keeps min/max transparent without relying on NaN
+// propagation differences between Atlas's VPU and npu_model.
+constexpr uint16_t kClampHigh = 0x7F80;
+constexpr uint16_t kClampLow = 0xFF80;
 constexpr uint16_t kNegInf = 0xFF80;
 constexpr uint16_t kPosInf = 0x7F80;
 
