@@ -455,9 +455,11 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
     scalarState.addAttributes(op->getAttrs());
     Operation *scalarOp = Operation::create(scalarState);
     body->push_back(scalarOp);
-    OperationState yieldState(op->getLoc(), linalg::YieldOp::getOperationName());
-    yieldState.addOperands(scalarOp->getResults());
-    body->push_back(Operation::create(yieldState));
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToEnd(body);
+      linalg::YieldOp::create(rewriter, op->getLoc(), scalarOp->getResults());
+    }
 
     if (std::getenv("TTATLAS_TRACE_P3"))
       llvm::errs() << "ttatlas P3 generic body blocks="
