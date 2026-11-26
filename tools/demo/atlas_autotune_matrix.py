@@ -69,6 +69,28 @@ def mlp32_redundant_relu(X, W, B, Y):
     tl.store(Y + off, acc.to(tl.bfloat16))
 
 
+@triton.jit
+def row_reduce32(X, Y):
+    rows = tl.arange(0, 32)
+    cols = tl.arange(0, 32)
+    off = rows[:, None] * 32 + cols[None, :]
+    x = tl.load(X + off).to(tl.float32)
+    maximum = tl.max(x, axis=1)
+    total = tl.sum(x - maximum[:, None], axis=1)
+    tl.store(Y + rows, total.to(tl.bfloat16))
+
+
+@triton.jit
+def row_reduce32_reassociated(X, Y):
+    rows = tl.arange(0, 32)
+    cols = tl.arange(0, 32)
+    off = rows[:, None] * 32 + cols[None, :]
+    x = tl.load(X + off).to(tl.float32)
+    maximum = tl.max(x, axis=1)
+    total = tl.sum(x - maximum[:, None], axis=1) + 0.0
+    tl.store(Y + rows, total.to(tl.bfloat16))
+
+
 @dataclass(frozen=True)
 class Workload:
     name: str
@@ -121,6 +143,27 @@ def _mlp_workload() -> Workload:
         (Candidate("mlp32", mlp32, signature), Candidate("mlp32_redundant_relu", mlp32_redundant_relu, signature)),
         {0: x, 1: w, 2: bias},
         {3: expected},
+        max_bf16_ulp=1,
+    )
+
+
+def _row_reduce_workload() -> Workload:
+    values = [0x3F80, 0x3F00, 0xBF80, 0x3E80] * 256
+    source = _bf16_buffer(values)
+    expected = []
+    for row in range(32):
+        row_values = [bf16(values[row * 32 + col]) for col in range(32)]
+        maximum = max(row_values)
+        expected.append(round_bf16(sum(value - maximum for value in row_values)))
+    signature = {"X": "*bf16", "Y": "*bf16"}
+    return Workload(
+        "row_reduce32",
+        (
+            Candidate("row_reduce32", row_reduce32, signature),
+            Candidate("row_reduce32_reassociated", row_reduce32_reassociated, signature),
+        ),
+        {0: source},
+        {1: _bf16_buffer(expected)},
         max_bf16_ulp=1,
     )
 
@@ -190,7 +233,7 @@ def main() -> int:
     parser.add_argument("--atlas-bin", type=Path, default=os.environ.get("ATLAS_OOT_BIN_DIR"))
     parser.add_argument("--triton-atlas-opt", type=Path, default=os.environ.get("TRITON_ATLAS_OPT"))
     args = parser.parse_args()
-    workloads = (_add16_workload(), _mlp_workload())
+    workloads = (_add16_workload(), _mlp_workload(), _row_reduce_workload())
     reports = []
     for workload in workloads:
         tuner = AtlasAutotuner(workload.candidates, atlas_bin=args.atlas_bin, triton_atlas_opt=args.triton_atlas_opt)
