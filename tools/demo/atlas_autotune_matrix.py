@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass
@@ -91,6 +92,28 @@ def row_reduce32_reassociated(X, Y):
     tl.store(Y + rows, total.to(tl.bfloat16))
 
 
+@triton.jit
+def softmax16(X, Y):
+    rows = tl.arange(0, 16)
+    cols = tl.arange(0, 16)
+    off = rows[:, None] * 16 + cols[None, :]
+    x = tl.load(X + off).to(tl.float32)
+    exponent = tl.exp(x - tl.max(x, axis=1)[:, None])
+    probability = exponent * (1.0 / tl.sum(exponent, axis=1))[:, None]
+    tl.store(Y + off, probability.to(tl.bfloat16))
+
+
+@triton.jit
+def softmax16_reassociated(X, Y):
+    rows = tl.arange(0, 16)
+    cols = tl.arange(0, 16)
+    off = rows[:, None] * 16 + cols[None, :]
+    x = tl.load(X + off).to(tl.float32)
+    exponent = tl.exp(x - tl.max(x, axis=1)[:, None])
+    probability = exponent * (1.0 / tl.sum(exponent, axis=1))[:, None]
+    tl.store(Y + off, (probability + 0.0).to(tl.bfloat16))
+
+
 @dataclass(frozen=True)
 class Workload:
     name: str
@@ -168,6 +191,29 @@ def _row_reduce_workload() -> Workload:
     )
 
 
+def _softmax_workload() -> Workload:
+    values = [0x0000, 0x3D80, 0xBD80, 0x3E80] * 64
+    source = _bf16_buffer(values)
+    expected = []
+    for row in range(16):
+        row_values = [float(bf16(values[row * 16 + col])) for col in range(16)]
+        maximum = max(row_values)
+        exponent = [math.exp(value - maximum) for value in row_values]
+        denominator = sum(exponent)
+        expected.extend(round_bf16(value / denominator) for value in exponent)
+    signature = {"X": "*bf16", "Y": "*bf16"}
+    return Workload(
+        "softmax16",
+        (
+            Candidate("softmax16", softmax16, signature),
+            Candidate("softmax16_reassociated", softmax16_reassociated, signature),
+        ),
+        {0: source},
+        {1: _bf16_buffer(expected)},
+        max_bf16_ulp=2,
+    )
+
+
 def _initial_image(workload: Workload, program: Mapping[str, Any]) -> bytes:
     manifest = json.loads(program["kernel_manifest"])
     input_base = manifest["dram_base"]["input"]
@@ -233,7 +279,7 @@ def main() -> int:
     parser.add_argument("--atlas-bin", type=Path, default=os.environ.get("ATLAS_OOT_BIN_DIR"))
     parser.add_argument("--triton-atlas-opt", type=Path, default=os.environ.get("TRITON_ATLAS_OPT"))
     args = parser.parse_args()
-    workloads = (_add16_workload(), _mlp_workload(), _row_reduce_workload())
+    workloads = (_add16_workload(), _mlp_workload(), _row_reduce_workload(), _softmax_workload())
     reports = []
     for workload in workloads:
         tuner = AtlasAutotuner(workload.candidates, atlas_bin=args.atlas_bin, triton_atlas_opt=args.triton_atlas_opt)
