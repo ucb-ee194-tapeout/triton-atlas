@@ -383,7 +383,7 @@ bool isScalarElementwiseType(Type type) {
 // scalar body, and only then insert it.
 struct ElementwiseToLinalgGeneric : ConversionPattern {
   ElementwiseToLinalgGeneric(MLIRContext *context)
-      : ConversionPattern(MatchAnyOpTypeTag(), /*benefit=*/1, context) {}
+      : ConversionPattern(MatchAnyOpTypeTag(), /*benefit=*/100, context) {}
 
   LogicalResult matchAndRewrite(
       Operation *op, ArrayRef<Value> operands,
