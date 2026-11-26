@@ -465,8 +465,18 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
                    << " ops=" << body->getOperations().size() << "\n";
 
     rewriter.insert(genericOperation);
+    if (std::getenv("TTATLAS_TRACE_P3"))
+      llvm::errs() << "ttatlas P3 generic after insert blocks="
+                   << generic->getRegion(0).getBlocks().size()
+                   << " ops=" << generic->getRegion(0).front().getOperations().size()
+                   << "\n";
     copyTags(op, generic);
     rewriter.replaceOp(op, generic->getResults());
+    if (std::getenv("TTATLAS_TRACE_P3"))
+      llvm::errs() << "ttatlas P3 generic after replace blocks="
+                   << generic->getRegion(0).getBlocks().size()
+                   << " ops=" << generic->getRegion(0).front().getOperations().size()
+                   << "\n";
     return success();
   }
 };
