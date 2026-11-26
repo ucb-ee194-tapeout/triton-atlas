@@ -570,8 +570,14 @@ void hoistTags(ModuleOp module) {
 // (Pipeline.cpp cleans up after passes 2, 4 and 5), so pass 4 sees only live
 // IR. The kernel's arguments stay.
 void eraseDeadLeftovers(ModuleOp module) {
-  IRRewriter rewriter(module.getContext());
-  (void)runRegionDCE(rewriter, module->getRegions());
+  // The MLIR runtime loaded by Triton's Python extension does not expose the
+  // same implicit-terminator trait as the headers used to build this plugin.
+  // Running region DCE here consequently treats linalg.generic bodies as
+  // dead and erases their scalar operation plus yield.  That leaves an
+  // invalid empty generic before pass 4 can run.  Later canonicalization and
+  // slot assignment already remove dead values, so keep the structured
+  // regions intact at this boundary.
+  (void)module;
 }
 
 // Rejects, before the conversion, the float compute this pass has no linalg
