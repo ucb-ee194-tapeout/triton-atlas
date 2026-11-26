@@ -439,18 +439,18 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
       body->addArgument(getElementTypeOrSelf(output.getType()), op->getLoc());
 
     {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToEnd(body);
+      OpBuilder bodyBuilder(rewriter.getContext());
+      bodyBuilder.setInsertionPointToEnd(body);
       SmallVector<Value> scalarArgs;
       scalarArgs.append(body->getArguments().begin(),
                         body->getArguments().begin() + operands.size());
       SmallVector<Type> scalarResultTypes;
       for (Type type : op->getResultTypes())
         scalarResultTypes.push_back(getElementTypeOrSelf(type));
-      Operation *scalarOp = rewriter.create(
-          op->getLoc(), rewriter.getStringAttr(op->getName().getStringRef()),
+      Operation *scalarOp = bodyBuilder.create(
+          op->getLoc(), bodyBuilder.getStringAttr(op->getName().getStringRef()),
           scalarArgs, scalarResultTypes, op->getAttrs());
-      linalg::YieldOp::create(rewriter, op->getLoc(), scalarOp->getResults());
+      linalg::YieldOp::create(bodyBuilder, op->getLoc(), scalarOp->getResults());
     }
 
     auto generic = cast<linalg::GenericOp>(rewriter.create(state));
