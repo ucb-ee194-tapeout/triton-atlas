@@ -155,7 +155,11 @@ def _validator(workload: Workload):
         unpack_outputs(manifest, output_window, host)
         for arg, expected in workload.expected.items():
             if bytes(host[arg]) != expected:
-                raise ValueError(f"output argument {arg} differs from the reference")
+                actual = bytes(host[arg])
+                raise ValueError(
+                    f"output argument {arg} differs from the reference; "
+                    f"actual[:32]={actual[:32].hex()} expected[:32]={expected[:32].hex()}"
+                )
         output_end = output_base - model_base + 2048 * len(manifest["outputs"])
         if any(byte != 0xA5 for byte in memory[:input_base - model_base]):
             raise ValueError("pre-kernel guard changed")
@@ -175,12 +179,18 @@ def main() -> int:
     reports = []
     for workload in workloads:
         tuner = AtlasAutotuner(workload.candidates, atlas_bin=args.atlas_bin, triton_atlas_opt=args.triton_atlas_opt)
-        result = tuner.tune(lambda _candidate, program: _initial_image(workload, program), validator=_validator(workload))
-        reports.append({
-            "workload": workload.name,
-            "selected": {"name": result.selected.name, "cycles": result.selected.cycles},
-            "measurements": [item.as_dict() for item in result.measurements],
-        })
+        try:
+            result = tuner.tune(
+                lambda _candidate, program: _initial_image(workload, program), validator=_validator(workload)
+            )
+            reports.append({
+                "workload": workload.name,
+                "status": "ok",
+                "selected": {"name": result.selected.name, "cycles": result.selected.cycles},
+                "measurements": [item.as_dict() for item in result.measurements],
+            })
+        except RuntimeError as error:
+            reports.append({"workload": workload.name, "status": "no_valid_candidate", "error": str(error)})
     report = {"model_revision": "337e9f249f938a1dff007ddf8a763e5cd4b3aa2b", "workloads": reports}
     if args.report:
         args.report.write_text(json.dumps(report, indent=2) + "\n")
