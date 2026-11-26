@@ -164,6 +164,10 @@ test.numerical: build.tools ## run matmul_relu on npu_model and compare every ou
 demo.autotune: build.tools ## compile and model-measure equivalent Triton candidates, then select the fastest
 	scripts/build.sh autotune_demo
 
+.PHONY: demo.autotune.matrix
+demo.autotune.matrix: build.tools ## model-measure BF16 elementwise and FP8/BF16 MLP candidate families
+	scripts/build.sh autotune_matrix
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Format
 # ----------------------------------------------------------------------------------------------------------------------

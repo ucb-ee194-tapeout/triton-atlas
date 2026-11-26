@@ -103,6 +103,25 @@ autotune_demo() {
         python tools/demo/atlas_autotune_demo.py --report build/autotune/atlas-autotune.json
 }
 
+# Exercise autotuning on non-matmul-only kernels: a BF16 elementwise tile and
+# an FP8-to-BF16 MLP tile.  The same emitted-program and npu_model checks are
+# used by the single-kernel demo.
+autotune_matrix() {
+    local problem
+    problem="$(npu_model_check)" || die "$problem"
+    [ -x build/bin/atlas-opt ] && [ -x build/bin/atlas-emit ] ||
+        die "no atlas-opt or atlas-emit; run make setup.atlas.full"
+    [ -n "${NPU_MODEL_ROOT:-}" ] || die "NPU_MODEL_ROOT is required"
+    [ -n "${NPU_MODEL_PYTHON:-}" ] || die "NPU_MODEL_PYTHON is required"
+    mkdir -p build/autotune
+    ATLAS_MODEL_ROOT="${ATLAS_MODEL_ROOT:-$NPU_MODEL_ROOT}" \
+        ATLAS_MODEL_PYTHON="${ATLAS_MODEL_PYTHON:-$NPU_MODEL_PYTHON}" \
+        ATLAS_MLIR_ROOT="${ATLAS_MLIR_ROOT:-$PWD/third_party/atlas-mlir}" \
+        ATLAS_OOT_BIN_DIR="${ATLAS_OOT_BIN_DIR:-$PWD/build/bin}" \
+        TRITON_ATLAS_OPT="${TRITON_ATLAS_OPT:-$PWD/build/bin/triton-atlas-opt}" \
+        python tools/demo/atlas_autotune_matrix.py --report build/autotune/atlas-autotune-matrix.json
+}
+
 # Build the server in folder $1 and link it where editors look.
 link_lsp() {
     cmake --build "$1" --target triton-atlas-lsp

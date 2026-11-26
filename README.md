@@ -96,6 +96,7 @@ triton-atlas/
 | Run some tests | `make test T=<file or folder>`; `LIT_FILTER=<regex>` picks by name |
 | Check numbers on npu_model | `make test.numerical` (opt-in; needs `make setup.atlas.full` and the npu_model settings in `env.sh`) |
 | Tune Triton candidates on npu_model | `make demo.autotune` (model-measure candidates and select the lowest-cycle valid program) |
+| Tune multiple kernel families on npu_model | `make demo.autotune.matrix` (BF16 elementwise and FP8/BF16 MLP candidate families) |
 | Run passes on one file | `triton-atlas-opt kernel.ttir --ttatlas-pipeline` (all of them) or `--<pass-name>` (one) |
 | Run pass 4 tiling, mask checks, and MXU tagging | `triton-atlas-opt input.mlir --ttatlas-legalize-shapes` |
 | Compile a kernel | `uv run python my_kernel.py` |
