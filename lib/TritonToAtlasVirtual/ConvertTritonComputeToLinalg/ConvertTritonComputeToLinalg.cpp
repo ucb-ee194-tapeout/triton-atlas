@@ -442,8 +442,6 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
           scalarState.addAttributes(op->getAttrs());
           Operation *scalarOp = Operation::create(scalarState);
           bodyBuilder.insert(scalarOp);
-          bodyBuilder.create<linalg::YieldOp>(bodyLoc,
-                                              scalarOp->getResults());
         });
     assert(state.regions.size() == 1 && "linalg.generic must have one region");
     // Create the operation only after the structured builder has populated the
