@@ -73,7 +73,7 @@ linalg::FillOp makeFill(OpBuilder &builder, Location loc, Value value,
   {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToEnd(body);
-    linalg::YieldOp::create(builder, loc, body->getArgument(0));
+    builder.create<linalg::YieldOp>(loc, body->getArgument(0));
   }
   return cast<linalg::FillOp>(builder.insert(fillOperation));
 }
@@ -462,13 +462,7 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
     {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToEnd(body);
-      auto yield = linalg::YieldOp::create(rewriter, op->getLoc(),
-                                           scalarOp->getResults());
-      if (std::getenv("TTATLAS_TRACE_P3"))
-        llvm::errs() << "ttatlas P3 yield registered="
-                     << yield->getName().isRegistered()
-                     << " terminator="
-                     << yield->mightHaveTrait<OpTrait::IsTerminator>() << "\n";
+      rewriter.create<linalg::YieldOp>(op->getLoc(), scalarOp->getResults());
     }
 
     if (std::getenv("TTATLAS_TRACE_P3"))
