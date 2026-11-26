@@ -114,6 +114,23 @@ def softmax16_reassociated(X, Y):
     tl.store(Y + off, (probability + 0.0).to(tl.bfloat16))
 
 
+@triton.jit
+def exp16(X, Y):
+    rows = tl.arange(0, 16)
+    cols = tl.arange(0, 16)
+    off = rows[:, None] * 16 + cols[None, :]
+    tl.store(Y + off, tl.exp(tl.load(X + off).to(tl.float32)).to(tl.bfloat16))
+
+
+@triton.jit
+def exp16_reassociated(X, Y):
+    rows = tl.arange(0, 16)
+    cols = tl.arange(0, 16)
+    off = rows[:, None] * 16 + cols[None, :]
+    value = tl.exp(tl.load(X + off).to(tl.float32))
+    tl.store(Y + off, (value + 0.0).to(tl.bfloat16))
+
+
 @dataclass(frozen=True)
 class Workload:
     name: str
@@ -214,6 +231,20 @@ def _softmax_workload() -> Workload:
     )
 
 
+def _exp_workload() -> Workload:
+    values = [0x0000, 0x3D80, 0xBD80, 0x3E80] * 64
+    source = _bf16_buffer(values)
+    expected = _bf16_buffer([round_bf16(math.exp(float(bf16(value)))) for value in values])
+    signature = {"X": "*bf16", "Y": "*bf16"}
+    return Workload(
+        "exp16",
+        (Candidate("exp16", exp16, signature), Candidate("exp16_reassociated", exp16_reassociated, signature)),
+        {0: source},
+        {1: expected},
+        max_bf16_ulp=2,
+    )
+
+
 def _initial_image(workload: Workload, program: Mapping[str, Any]) -> bytes:
     manifest = json.loads(program["kernel_manifest"])
     input_base = manifest["dram_base"]["input"]
@@ -281,7 +312,7 @@ def main() -> int:
     parser.add_argument("--atlas-bin", type=Path, default=os.environ.get("ATLAS_OOT_BIN_DIR"))
     parser.add_argument("--triton-atlas-opt", type=Path, default=os.environ.get("TRITON_ATLAS_OPT"))
     args = parser.parse_args()
-    workloads = (_add16_workload(), _mlp_workload(), _row_reduce_workload(), _softmax_workload())
+    workloads = (_add16_workload(), _mlp_workload(), _row_reduce_workload(), _softmax_workload(), _exp_workload())
     reports = []
     for workload in workloads:
         tuner = AtlasAutotuner(workload.candidates, atlas_bin=args.atlas_bin, triton_atlas_opt=args.triton_atlas_opt)
