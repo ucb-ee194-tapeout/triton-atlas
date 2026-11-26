@@ -263,7 +263,8 @@ def _validator(workload: Workload):
                     f"actual_window={actual[max(0, first_diff - 8):first_diff + 8].hex()} "
                     f"expected_window={expected[max(0, first_diff - 8):first_diff + 8].hex()}; "
                     f"max_allowed_ulp={workload.max_bf16_ulp}; "
-                    f"output_slot={manifest['outputs']}"
+                    f"output_slot={manifest['outputs']}; "
+                    f"operations={[row['operation'] for row in program['instructions']]}"
                 )
         output_end = output_base - model_base + 2048 * len(manifest["outputs"])
         if any(byte != 0xA5 for byte in memory[:input_base - model_base]):
