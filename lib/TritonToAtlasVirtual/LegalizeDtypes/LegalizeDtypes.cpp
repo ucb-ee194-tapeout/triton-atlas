@@ -211,9 +211,11 @@ LogicalResult retype(ModuleOp module,
 // also folds and erases dead ops elsewhere in the module, which is harmless:
 // the pipeline runs canonicalize right after this pass anyway.
 void eraseIdentityGenerics(ModuleOp module) {
-  RewritePatternSet patterns(module.getContext());
-  linalg::GenericOp::getCanonicalizationPatterns(patterns, module.getContext());
-  (void)applyPatternsGreedily(module, std::move(patterns));
+  // The canonicalization patterns query GenericOp's implicit terminator via
+  // the wheel's MLIR trait table.  The plugin's linalg.yield is structurally
+  // valid but has a distinct TypeID in that runtime, so defer this cleanup to
+  // the later Atlas lowering instead of crashing in Block::getTerminator().
+  (void)module;
 }
 
 // This pass retypes FP8 and BF16 sources only: converting an f32 kernel
