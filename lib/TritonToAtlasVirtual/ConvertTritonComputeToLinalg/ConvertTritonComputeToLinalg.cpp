@@ -685,6 +685,11 @@ struct ConvertTritonComputeToLinalg
     hoistTags(getOperation());
     if (trace)
       llvm::errs() << "ttatlas P3: done\n";
+    // The Triton-linked printer materializes implicit structured terminators
+    // for the runtime's older linalg registration.  Keep that normalization
+    // on the non-trace path too, but discard the verbose IR dump.
+    if (!trace)
+      getOperation()->print(llvm::nulls());
     if (trace)
       getOperation()->print(llvm::errs());
   }
