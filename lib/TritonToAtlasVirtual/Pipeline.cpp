@@ -23,8 +23,15 @@ static void addCleanup(OpPassManager &pm) {
   // using its TypeID on a valid plugin-created region and abort.  The Atlas
   // passes perform their own local cleanup, so omit this cross-image cleanup
   // only for the Python plugin pipeline (triton-atlas-opt keeps it).
-  if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
-    return;
+  if (std::getenv("TTATLAS_PLUGIN_RUNTIME")) {
+    // The first cleanup is before pass 3 creates any linalg operations, so it
+    // is safe and is needed to canonicalize TTIR pointer arithmetic.  All
+    // later cleanups would hand linalg regions to the wheel's incompatible
+    // trait table.
+    static unsigned pluginCleanupCount = 0;
+    if (pluginCleanupCount++ != 0)
+      return;
+  }
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 }
