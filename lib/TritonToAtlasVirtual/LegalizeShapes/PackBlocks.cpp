@@ -149,6 +149,8 @@ void clampReaderOperand(IRRewriter &rewriter, linalg::LinalgOp reader,
 // instead, so the load is packed once, in the layout the reader wants
 // (a transposed weight is then one pack of the load).
 void foldLoadTransposes(IRRewriter &rewriter, ModuleOp module) {
+  if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+    return;
   SmallVector<linalg::GenericOp> copies;
   module.walk([&](linalg::GenericOp op) {
     if (op.getNumDpsInputs() != 1 || op.getNumDpsInits() != 1 ||
