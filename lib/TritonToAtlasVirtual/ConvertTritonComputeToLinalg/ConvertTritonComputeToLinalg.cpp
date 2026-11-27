@@ -689,7 +689,7 @@ struct ConvertTritonComputeToLinalg
     // for the runtime's older linalg registration.  Keep that normalization
     // on the non-trace path too, but discard the verbose IR dump.
     if (!trace)
-      getOperation()->print(llvm::nulls());
+      getOperation()->print(llvm::errs());
     if (trace)
       getOperation()->print(llvm::errs());
   }
