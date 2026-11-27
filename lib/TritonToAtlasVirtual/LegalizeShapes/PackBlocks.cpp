@@ -179,6 +179,9 @@ void foldLoadTransposes(IRRewriter &rewriter, ModuleOp module) {
 struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
+    const bool trace = std::getenv("TTATLAS_TRACE_P4") != nullptr;
+    if (trace)
+      llvm::errs() << "ttatlas P4: begin\n";
     IRRewriter rewriter(&getContext());
     auto reject = [&](Operation *op, const Twine &why) {
       ttatlas::emitUnsupported(op, why);
@@ -190,6 +193,8 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
       if (!isa<linalg::GenericOp>(op))
         named.push_back(op);
     });
+    if (trace)
+      llvm::errs() << "ttatlas P4: named=" << named.size() << "\n";
     for (linalg::LinalgOp op : named) {
       rewriter.setInsertionPoint(op);
       if (failed(linalg::generalizeNamedOp(rewriter, op)))
@@ -197,9 +202,13 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
     }
 
     foldLoadTransposes(rewriter, module);
+    if (trace)
+      llvm::errs() << "ttatlas P4: folded transposes\n";
 
     SmallVector<linalg::GenericOp> generics;
     module.walk([&](linalg::GenericOp op) { generics.push_back(op); });
+    if (trace)
+      llvm::errs() << "ttatlas P4: generics=" << generics.size() << "\n";
     for (linalg::GenericOp op : generics) {
       if (op.getNumLoops() == 0)
         continue;
