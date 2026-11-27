@@ -14,6 +14,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <cstdlib>
+
 namespace mlir::triton {
 
 #define GEN_PASS_DEF_PACKBLOCKS
@@ -200,6 +202,8 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
     module.walk([&](linalg::GenericOp op) { generics.push_back(op); });
     for (linalg::GenericOp op : generics) {
       if (op.getNumLoops() == 0)
+        continue;
+      if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
         continue;
       // A contraction's K padding is the pack's zero, which only holds when
       // the host wrote that zero: operands that are loads.
