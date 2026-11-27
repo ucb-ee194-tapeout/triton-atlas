@@ -97,10 +97,29 @@ bool hasAtlasTypes(Operation *op, const TypeConverter &converter) {
     return signature.isSignatureLegal(func.getFunctionType()) &&
            signature.isLegal(&func.getBody());
   }
-  return converter.isLegal(op) &&
-         llvm::all_of(op->getRegions(), [&](Region &region) {
-           return converter.isLegal(&region);
-         });
+  if (!converter.isLegal(op))
+    return false;
+  // TypeConverter::isLegal(Region *) asks MLIR for the block terminator.  The
+  // Triton wheel and this plugin carry distinct linalg trait registries, so a
+  // valid linalg.yield is not recognized by that helper. Walk the type graph
+  // directly instead; conversion patterns still see every nested operation.
+  std::function<bool(Region &)> regionTypesLegal = [&](Region &region) {
+    for (Block &block : region) {
+      for (BlockArgument argument : block.getArguments())
+        if (!converter.isLegal(argument.getType()))
+          return false;
+      for (Operation &nested : block) {
+        if (!converter.isLegal(nested.getOperandTypes()) ||
+            !converter.isLegal(nested.getResultTypes()))
+          return false;
+        for (Region &nestedRegion : nested.getRegions())
+          if (!regionTypesLegal(nestedRegion))
+            return false;
+      }
+    }
+    return true;
+  };
+  return llvm::all_of(op->getRegions(), regionTypesLegal);
 }
 
 // Any op with f32 types: rebuilt with converted result types and the
