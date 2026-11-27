@@ -16,6 +16,15 @@ namespace mlir::triton {
 // cleanup merges equal constants and keeps one slot for them (pass 7 rejects
 // that), and pass 7 needs its matmul and pack ops in order.
 static void addCleanup(OpPassManager &pm) {
+  // The Triton Python wheel owns the pass manager and its canonicalizer.  Our
+  // plugin supplies the linalg dialect from a second static library because
+  // the wheel does not export it; the two images therefore have distinct
+  // linalg trait TypeIDs.  The wheel canonicalizer can call getTerminator()
+  // using its TypeID on a valid plugin-created region and abort.  The Atlas
+  // passes perform their own local cleanup, so omit this cross-image cleanup
+  // only for the Python plugin pipeline (triton-atlas-opt keeps it).
+  if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+    return;
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
 }

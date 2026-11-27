@@ -21,6 +21,7 @@
 #include "triton/Tools/PluginUtils.h"
 #include "triton/Version.h"
 
+#include <cstdlib>
 #include <iterator>
 
 using namespace mlir::triton;
@@ -77,6 +78,9 @@ static void addAtlasVirtualPipeline(mlir::PassManager *pm,
   // their own operation APIs consistently, so defer cross-image verification
   // until the emitted virtual stream is checked by atlas-mlir.
   pm->enableVerifier(false);
+  // See addCleanup in Pipeline.cpp: avoid the host wheel's canonicalizer
+  // applying its linalg trait TypeIDs to operations made by this plugin.
+  ::setenv("TTATLAS_PLUGIN_RUNTIME", "1", /*overwrite=*/1);
   buildTritonToAtlasVirtualPipeline(*pm);
 }
 
