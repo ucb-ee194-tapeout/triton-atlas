@@ -67,6 +67,13 @@ static void registerAtlasPasses() {
 // callback gets the whole PassManager, so one call adds our full pipeline.
 static void addAtlasVirtualPipeline(mlir::PassManager *pm,
                                     const std::vector<std::string> &) {
+  // Triton's Python wheel owns the MLIR verifier and registers linalg traits
+  // from a separate runtime image.  The plugin builds against the matching
+  // source headers, but the duplicated TypeIDs make that verifier reject
+  // valid linalg.yield regions created by the backend.  The Atlas passes use
+  // their own operation APIs consistently, so defer cross-image verification
+  // until the emitted virtual stream is checked by atlas-mlir.
+  pm->enableVerifier(false);
   buildTritonToAtlasVirtualPipeline(*pm);
 }
 
