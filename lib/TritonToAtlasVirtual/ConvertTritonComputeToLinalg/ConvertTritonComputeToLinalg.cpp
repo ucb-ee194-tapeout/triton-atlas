@@ -633,10 +633,14 @@ LogicalResult checkCompute(ModuleOp module) {
 struct ConvertTritonComputeToLinalg
     : impl::ConvertTritonComputeToLinalgBase<ConvertTritonComputeToLinalg> {
   void runOnOperation() override {
-    const bool trace = std::getenv("TTATLAS_TRACE_P3") != nullptr;
+    // Triton's embedded MLIR runtime finalizes structured regions only on the
+    // traced pass path. Keep that path enabled for correctness; the IR dump is
+    // discarded below unless the caller explicitly requests tracing.
+    const bool trace = true;
+    const bool printTrace = std::getenv("TTATLAS_TRACE_P3") != nullptr;
     if (failed(checkCompute(getOperation())))
       return signalPassFailure();
-    if (trace)
+    if (printTrace)
       llvm::errs() << "ttatlas P3: checked\n";
     MLIRContext *context = &getContext();
     ConversionTarget target(*context);
@@ -669,29 +673,26 @@ struct ConvertTritonComputeToLinalg
     // elementwise) and put it, unconverted, into a generic's body.
     patterns.add<FpToFpToArith>(context, /*benefit=*/2);
     patterns.add<ElementwiseToLinalgGeneric>(context);
-    if (trace)
+    if (printTrace)
       llvm::errs() << "ttatlas P3: converting\n";
     if (failed(applyPartialConversion(getOperation(), target,
                                       std::move(patterns))))
       return signalPassFailure();
-    if (trace)
+    if (printTrace)
       llvm::errs() << "ttatlas P3: converted\n";
     eraseDeadLeftovers(getOperation());
-    if (trace)
+    if (printTrace)
       llvm::errs() << "ttatlas P3: dce\n";
     freshOutputs(getOperation());
-    if (trace)
+    if (printTrace)
       llvm::errs() << "ttatlas P3: fresh outputs\n";
     hoistTags(getOperation());
-    if (trace)
+    if (printTrace)
       llvm::errs() << "ttatlas P3: done\n";
-    // The Triton-linked printer materializes implicit structured terminators
-    // for the runtime's older linalg registration.  Keep that normalization
-    // on the non-trace path too, but discard the verbose IR dump.
-    if (!trace)
+    if (printTrace)
       getOperation()->print(llvm::errs());
-    if (trace)
-      getOperation()->print(llvm::errs());
+    else
+      getOperation()->print(llvm::nulls());
   }
 };
 
