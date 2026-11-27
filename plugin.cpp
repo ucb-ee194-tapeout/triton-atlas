@@ -10,7 +10,9 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/TilingInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Tensor/IR/TensorInferTypeOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/IR/TensorTilingInterfaceImpl.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -28,7 +30,8 @@ using namespace mlir::triton;
 // other.
 static void registerAtlasDialects(mlir::DialectRegistry *registry) {
   registry->insert<mlir::atlas::AtlasDialect, mlir::ttatlas::TTAtlasDialect,
-                   mlir::func::FuncDialect, mlir::arith::ArithDialect>();
+                   mlir::func::FuncDialect, mlir::arith::ArithDialect,
+                   mlir::linalg::LinalgDialect, mlir::tensor::TensorDialect>();
   // func promises an inliner interface that lives in a separate extension;
   // without it Triton's inliner pass aborts
   // ("promised by dialect 'func' but never implemented"). The wheel doesn't
