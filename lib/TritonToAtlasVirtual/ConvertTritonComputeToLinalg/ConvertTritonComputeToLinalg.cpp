@@ -50,6 +50,14 @@ Value emptyLike(OpBuilder &builder, Location loc, Type type) {
                                  tensor.getElementType());
 }
 
+// Some Triton-linked MLIR builds eagerly seed structured regions with their
+// implicit yield before invoking a callback.  Replace that seed rather than
+// appending after it (which violates the terminator invariant).
+void clearImplicitYield(Block *body) {
+  if (!body->empty() && isa<linalg::YieldOp>(body->back()))
+    body->back().erase();
+}
+
 // Build a tensor linalg.fill and make its structured-op body explicit.  Recent
 // MLIR FillOp builders normally materialize this body through
 // buildStructuredOp, but the MLIR library loaded with Triton's Python runtime
@@ -68,8 +76,11 @@ linalg::FillOp makeFill(OpBuilder &builder, Location loc, Value value,
   auto fill = cast<linalg::FillOp>(fillOperation);
   Region &region = fill->getRegion(0);
   Block *body = region.empty() ? &region.emplaceBlock() : &region.front();
-  body->addArgument(value.getType(), loc);
-  body->addArgument(getElementTypeOrSelf(output.getType()), loc);
+  clearImplicitYield(body);
+  if (body->getNumArguments() == 0) {
+    body->addArgument(value.getType(), loc);
+    body->addArgument(getElementTypeOrSelf(output.getType()), loc);
+  }
   {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToEnd(body);
@@ -91,9 +102,11 @@ linalg::MatmulOp makeMatmul(OpBuilder &builder, Location loc, Type result,
   auto matmul = cast<linalg::MatmulOp>(matmulOperation);
   Region &region = matmul->getRegion(0);
   Block *body = region.empty() ? &region.emplaceBlock() : &region.front();
+  clearImplicitYield(body);
   SmallVector<Value> operands{lhs, rhs, output};
-  for (Value operand : operands)
-    body->addArgument(getElementTypeOrSelf(operand.getType()), loc);
+  if (body->getNumArguments() == 0)
+    for (Value operand : operands)
+      body->addArgument(getElementTypeOrSelf(operand.getType()), loc);
   {
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToEnd(body);
@@ -344,6 +357,7 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
         [&](OpBuilder &builder, Location bodyLoc, ValueRange blockArgs) {
           // linalg.reduce's body takes (element, accumulator); Triton's
           // combine takes the accumulator first.
+          clearImplicitYield(builder.getInsertionBlock());
           IRMapping mapping;
           mapping.map(body.getArgument(0), blockArgs[1]);
           mapping.map(body.getArgument(1), blockArgs[0]);
@@ -484,9 +498,11 @@ struct MaxNumToLinalgMax : OpConversionPattern<arith::MaxNumFOp> {
     auto maximum = cast<linalg::MaxOp>(maxOperation);
     Region &region = maximum->getRegion(0);
     Block *body = region.empty() ? &region.emplaceBlock() : &region.front();
+    clearImplicitYield(body);
     operands.push_back(output);
-    for (Value value : operands)
-      body->addArgument(getElementTypeOrSelf(value.getType()), loc);
+    if (body->getNumArguments() == 0)
+      for (Value value : operands)
+        body->addArgument(getElementTypeOrSelf(value.getType()), loc);
     {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToEnd(body);
