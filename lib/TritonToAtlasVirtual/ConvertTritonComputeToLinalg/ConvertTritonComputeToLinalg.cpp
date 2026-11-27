@@ -437,40 +437,31 @@ struct ElementwiseToLinalgGeneric : ConversionPattern {
     outputs.reserve(op->getNumResults());
     for (Type type : op->getResultTypes())
       outputs.push_back(emptyLike(rewriter, op->getLoc(), type));
-    SmallVector<Attribute> iteratorAttrs;
-    iteratorAttrs.assign(
-        rank, linalg::IteratorTypeAttr::get(rewriter.getContext(),
-                                             utils::IteratorType::parallel));
+    SmallVector<utils::IteratorType> iteratorTypes(
+        rank, utils::IteratorType::parallel);
 
     OperationState state(op->getLoc(), linalg::GenericOp::getOperationName());
     linalg::GenericOp::build(
-        rewriter, state, op->getResultTypes(), operands, outputs,
-        rewriter.getAffineMapArrayAttr(indexingMaps),
-        rewriter.getArrayAttr(iteratorAttrs), /*doc=*/nullptr,
-        /*libraryCall=*/nullptr);
+        rewriter, state, op->getResultTypes(), operands, outputs, indexingMaps,
+        iteratorTypes,
+        [&](OpBuilder &bodyBuilder, Location bodyLoc, ValueRange bodyArgs) {
+          SmallVector<Value> scalarArgs(bodyArgs.begin(),
+                                        bodyArgs.begin() + operands.size());
+          SmallVector<Type> scalarResultTypes;
+          for (Type type : op->getResultTypes())
+            scalarResultTypes.push_back(getElementTypeOrSelf(type));
+          OperationState scalarState(bodyLoc, op->getName().getStringRef());
+          scalarState.addOperands(scalarArgs);
+          scalarState.addTypes(scalarResultTypes);
+          scalarState.addAttributes(op->getAttrs());
+          Operation *scalarOp = Operation::create(scalarState);
+          bodyBuilder.insert(scalarOp);
+          bodyBuilder.create<linalg::YieldOp>(bodyLoc,
+                                              scalarOp->getResults());
+        });
     assert(state.regions.size() == 1 && "linalg.generic must have one region");
     Operation *genericOperation = Operation::create(state);
     auto generic = cast<linalg::GenericOp>(genericOperation);
-    Region &region = generic->getRegion(0);
-    Block *body = region.empty() ? &region.emplaceBlock() : &region.front();
-    clearImplicitYield(body);
-    if (body->getNumArguments() == 0) {
-      for (Value operand : operands)
-        body->addArgument(getElementTypeOrSelf(operand.getType()), op->getLoc());
-      for (Value output : outputs)
-        body->addArgument(getElementTypeOrSelf(output.getType()), op->getLoc());
-    }
-    SmallVector<Value> scalarArgs(body->getArguments().begin(),
-                                  body->getArguments().begin() + operands.size());
-    SmallVector<Type> scalarResultTypes;
-    for (Type type : op->getResultTypes())
-      scalarResultTypes.push_back(getElementTypeOrSelf(type));
-    OpBuilder bodyBuilder(rewriter.getContext());
-    bodyBuilder.setInsertionPointToEnd(body);
-    Operation *scalarOp = bodyBuilder.create(
-        op->getLoc(), bodyBuilder.getStringAttr(op->getName().getStringRef()),
-        scalarArgs, scalarResultTypes, op->getAttrs());
-    bodyBuilder.create<linalg::YieldOp>(op->getLoc(), scalarOp->getResults());
     rewriter.insert(genericOperation);
     copyTags(op, generic);
     rewriter.replaceOp(op, generic->getResults());
