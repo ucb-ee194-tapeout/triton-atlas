@@ -31,6 +31,16 @@ constexpr uint16_t kClampLow = 0xFF80;
 constexpr uint16_t kNegInf = 0xFF80;
 constexpr uint16_t kPosInf = 0x7F80;
 
+// Do not use Block::getTerminator here.  The plugin creates linalg regions
+// with a yield operation, but the Triton wheel can carry a different
+// SingleBlockImplicitTerminator TypeID.  Looking at the operation itself is
+// equivalent for these regions and avoids an assertion in the host MLIR.
+linalg::YieldOp getYield(Block &body) {
+  if (body.empty())
+    return {};
+  return dyn_cast<linalg::YieldOp>(&body.back());
+}
+
 enum class ReaderKind { sum, max, min };
 
 // The reader of a padded column dimension that `op` is, or nothing when it
@@ -143,7 +153,9 @@ void foldLoadTransposes(IRRewriter &rewriter, ModuleOp module) {
         !op.getInputs()[0].getDefiningOp<LoadOp>() ||
         !llvm::all_of(op.getIteratorTypesArray(), linalg::isParallelIterator))
       return;
-    auto yield = cast<linalg::YieldOp>(op.getBody()->getTerminator());
+    auto yield = getYield(*op.getBody());
+    if (!yield)
+      return;
     if (yield.getOperand(0) == op.getBody()->getArgument(0) &&
         op.getMatchingIndexingMap(op.getDpsInputOperand(0)).isPermutation())
       copies.push_back(op);

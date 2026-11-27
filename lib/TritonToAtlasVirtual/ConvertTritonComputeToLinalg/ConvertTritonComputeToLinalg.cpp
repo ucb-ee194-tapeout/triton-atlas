@@ -339,7 +339,9 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
                     combine->getOperand(1) == args[1]) ||
                    (combine->getOperand(0) == args[1] &&
                     combine->getOperand(1) == args[0]));
-    if (!onArgs || body.getTerminator()->getOperand(0) != combine->getResult(0))
+    Operation *terminator = body.empty() ? nullptr : &body.back();
+    if (!onArgs || !terminator ||
+        terminator->getOperand(0) != combine->getResult(0))
       return rewriter.notifyMatchFailure(op, "the body isn't one combine of "
                                              "its two arguments");
     TypedAttr identity =

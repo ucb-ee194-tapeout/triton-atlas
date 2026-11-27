@@ -129,7 +129,9 @@ bool isRowCombine(ReduceOp reduce) {
       (combine->getOperand(0) == args[0] &&
        combine->getOperand(1) == args[1]) ||
       (combine->getOperand(0) == args[1] && combine->getOperand(1) == args[0]);
-  return onArgs && body.getTerminator()->getOperand(0) == combine->getResult(0);
+  Operation *terminator = body.empty() ? nullptr : &body.back();
+  return onArgs && terminator &&
+         terminator->getOperand(0) == combine->getResult(0);
 }
 
 LogicalResult checkReduce(ReduceOp reduce, EmitFn emit) {

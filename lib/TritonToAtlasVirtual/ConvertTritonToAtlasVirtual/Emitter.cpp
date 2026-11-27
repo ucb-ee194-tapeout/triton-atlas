@@ -784,6 +784,10 @@ struct Emitter {
   // body is one minnumf then one maxnumf over its three inputs.
   static bool isClamp(linalg::GenericOp op) {
     Block &body = *op.getBody();
+    size_t bodyOperationCount = 0;
+    for (Operation &inner : body)
+      if (!isa<linalg::YieldOp>(inner))
+        ++bodyOperationCount;
     if (op.getNumDpsInputs() != 3 || op.getNumDpsInits() != 1 ||
         !llvm::all_of(op.getIteratorTypesArray(),
                       [](utils::IteratorType type) {
@@ -791,11 +795,13 @@ struct Emitter {
                       }) ||
         !llvm::all_of(op.getIndexingMapsArray(),
                       [](AffineMap map) { return map.isIdentity(); }) ||
-        llvm::range_size(body.without_terminator()) != 2)
+        bodyOperationCount != 2)
       return false;
     auto min = dyn_cast<arith::MinNumFOp>(&body.front());
     auto max = dyn_cast<arith::MaxNumFOp>(body.front().getNextNode());
-    auto yield = cast<linalg::YieldOp>(body.getTerminator());
+    if (body.empty() || !isa<linalg::YieldOp>(body.back()))
+      return false;
+    auto yield = cast<linalg::YieldOp>(&body.back());
     return min && max && max.getLhs() == min.getResult() &&
            yield.getNumOperands() == 1 &&
            yield.getOperand(0) == max.getResult() &&
@@ -828,7 +834,9 @@ struct Emitter {
     if (isClamp(op))
       return clamp(op);
     Operation *compute = nullptr;
-    for (Operation &inner : body.without_terminator()) {
+    for (Operation &inner : body) {
+      if (isa<linalg::YieldOp>(inner))
+        continue;
       if (isa<arith::ConstantOp>(inner))
         continue;
       if (compute)
@@ -836,7 +844,9 @@ struct Emitter {
                           "body has no Atlas lowering");
       compute = &inner;
     }
-    auto yield = cast<linalg::YieldOp>(body.getTerminator());
+    if (body.empty() || !isa<linalg::YieldOp>(body.back()))
+      return reject(op, "a linalg.generic has no yield operation");
+    auto yield = cast<linalg::YieldOp>(&body.back());
     if (!compute || compute->getNumResults() != 1 ||
         yield.getNumOperands() != 1 ||
         yield.getOperand(0) != compute->getResult(0))
