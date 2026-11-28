@@ -40,7 +40,34 @@ constexpr uint16_t kPosInf = 0x7F80;
 linalg::YieldOp getYield(Block &body) {
   if (body.empty())
     return {};
-  return dyn_cast<linalg::YieldOp>(&body.back());
+  Operation &last = body.back();
+  if (last.getName().getStringRef() != linalg::YieldOp::getOperationName())
+    return {};
+  return cast<linalg::YieldOp>(&last);
+}
+
+// linalg transforms in the Triton wheel can clone a structured region without
+// carrying over its implicit yield trait.  Restore the explicit yield from
+// the final scalar producer before the next Atlas pass inspects the body.
+bool repairYield(linalg::GenericOp op) {
+  Block &body = *op.getBody();
+  if (getYield(body))
+    return true;
+  if (body.empty() || op.getNumDpsInits() != 1)
+    return false;
+  Operation *producer = nullptr;
+  for (Operation &inner : body) {
+    if (inner.getName().getStringRef() == linalg::YieldOp::getOperationName())
+      continue;
+    if (inner.getNumResults() != 0)
+      producer = &inner;
+  }
+  if (!producer || producer->getNumResults() != 1)
+    return false;
+  OpBuilder builder(op.getContext());
+  builder.setInsertionPointToEnd(&body);
+  builder.create<linalg::YieldOp>(producer->getLoc(), producer->getResult(0));
+  return true;
 }
 
 enum class ReaderKind { sum, max, min };
@@ -209,6 +236,9 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
 
     SmallVector<linalg::GenericOp> generics;
     module.walk([&](linalg::GenericOp op) { generics.push_back(op); });
+    for (linalg::GenericOp op : generics)
+      if (!repairYield(op))
+        return reject(op, "a linalg.generic has no recoverable yield");
     if (trace)
       llvm::errs() << "ttatlas P4: generics=" << generics.size() << "\n";
     for (linalg::GenericOp op : generics) {
@@ -239,6 +269,10 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
       FailureOr<linalg::PackResult> packed = linalg::pack(rewriter, op, sizes);
       if (failed(packed))
         return reject(op, "cannot pack this linalg op into 32x32 blocks");
+      if (auto packedGeneric = dyn_cast<linalg::GenericOp>(
+              packed->packedLinalgOp.getOperation());
+          packedGeneric && !repairYield(packedGeneric))
+        return reject(packedGeneric, "packing dropped the linalg.generic yield");
       if (llvm::any_of(packed->packOps, [](linalg::PackOp pack) {
             return !pack.getOuterDimsPerm().empty();
           }))

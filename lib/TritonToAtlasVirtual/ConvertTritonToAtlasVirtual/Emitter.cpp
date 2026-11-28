@@ -782,6 +782,32 @@ struct Emitter {
 
   // Pass 4's clamp mask: x' = max(min(x, hi), lo), a pointwise generic whose
   // body is one minnumf then one maxnumf over its three inputs.
+  static linalg::YieldOp yieldOf(Block &body) {
+    if (body.empty() ||
+        body.back().getName().getStringRef() !=
+            linalg::YieldOp::getOperationName())
+      return {};
+    return cast<linalg::YieldOp>(&body.back());
+  }
+
+  static bool repairYield(linalg::GenericOp op) {
+    Block &body = *op.getBody();
+    if (yieldOf(body))
+      return true;
+    if (body.empty() || op.getNumDpsInits() != 1)
+      return false;
+    Operation *producer = nullptr;
+    for (Operation &inner : body)
+      if (inner.getNumResults() != 0)
+        producer = &inner;
+    if (!producer || producer->getNumResults() != 1)
+      return false;
+    OpBuilder builder(op.getContext());
+    builder.setInsertionPointToEnd(&body);
+    builder.create<linalg::YieldOp>(producer->getLoc(), producer->getResult(0));
+    return true;
+  }
+
   static bool isClamp(linalg::GenericOp op) {
     Block &body = *op.getBody();
     size_t bodyOperationCount = 0;
@@ -799,9 +825,9 @@ struct Emitter {
       return false;
     auto min = dyn_cast<arith::MinNumFOp>(&body.front());
     auto max = dyn_cast<arith::MaxNumFOp>(body.front().getNextNode());
-    if (body.empty() || !isa<linalg::YieldOp>(body.back()))
+    if (!yieldOf(body))
       return false;
-    auto yield = cast<linalg::YieldOp>(&body.back());
+    auto yield = yieldOf(body);
     return min && max && max.getLhs() == min.getResult() &&
            yield.getNumOperands() == 1 &&
            yield.getOperand(0) == max.getResult() &&
@@ -831,11 +857,14 @@ struct Emitter {
 
   LogicalResult generic(linalg::GenericOp op) {
     Block &body = *op.getBody();
+    if (!repairYield(op))
+      return reject(op, "a linalg.generic has no recoverable yield");
     if (isClamp(op))
       return clamp(op);
     Operation *compute = nullptr;
     for (Operation &inner : body) {
-      if (isa<linalg::YieldOp>(inner))
+      if (inner.getName().getStringRef() ==
+          linalg::YieldOp::getOperationName())
         continue;
       if (isa<arith::ConstantOp>(inner))
         continue;
@@ -844,9 +873,9 @@ struct Emitter {
                           "body has no Atlas lowering");
       compute = &inner;
     }
-    if (body.empty() || !isa<linalg::YieldOp>(body.back()))
+    if (!yieldOf(body))
       return reject(op, "a linalg.generic has no yield operation");
-    auto yield = cast<linalg::YieldOp>(&body.back());
+    auto yield = yieldOf(body);
     if (!compute || compute->getNumResults() != 1 ||
         yield.getNumOperands() != 1 ||
         yield.getOperand(0) != compute->getResult(0))
