@@ -11,6 +11,7 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/IRMapping.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 
@@ -68,6 +69,31 @@ bool repairYield(linalg::GenericOp op) {
   builder.setInsertionPointToEnd(&body);
   builder.create<linalg::YieldOp>(producer->getLoc(), producer->getResult(0));
   return true;
+}
+
+// Preserve a scalar body across linalg::pack.  The transform in Triton's
+// wheel can clone the generic region without its body when its linalg trait
+// TypeID differs from the plugin's.  A detached snapshot lets us restore the
+// exact scalar operation and its block-argument mapping after the transform.
+void restoreBody(Operation *snapshot, linalg::GenericOp packed) {
+  Region &sourceRegion = snapshot->getRegion(0);
+  if (sourceRegion.empty())
+    return;
+  Block &source = sourceRegion.front();
+  Block &destination = *packed.getBody();
+  while (!destination.empty())
+    destination.back().erase();
+  IRMapping mapping;
+  for (auto [from, to] : llvm::zip(source.getArguments(),
+                                   destination.getArguments()))
+    mapping.map(from, to);
+  OpBuilder builder(packed.getContext());
+  builder.setInsertionPointToEnd(&destination);
+  for (Operation &inner : source) {
+    if (inner.getName().getStringRef() == linalg::YieldOp::getOperationName())
+      continue;
+    builder.clone(inner, mapping);
+  }
 }
 
 enum class ReaderKind { sum, max, min };
@@ -244,8 +270,6 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
     for (linalg::GenericOp op : generics) {
       if (op.getNumLoops() == 0)
         continue;
-      if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
-        continue;
       // A contraction's K padding is the pack's zero, which only holds when
       // the host wrote that zero: operands that are loads.
       bool paddedK = false;
@@ -266,15 +290,30 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
                           "min combiner over one input");
 
       rewriter.setInsertionPoint(op);
+      Operation *snapshot =
+          std::getenv("TTATLAS_PLUGIN_RUNTIME") ? op->clone() : nullptr;
       SmallVector<OpFoldResult> sizes(op.getNumLoops(),
                                       rewriter.getIndexAttr(kTile));
       FailureOr<linalg::PackResult> packed = linalg::pack(rewriter, op, sizes);
-      if (failed(packed))
+      if (failed(packed)) {
+        if (snapshot)
+          snapshot->destroy();
         return reject(op, "cannot pack this linalg op into 32x32 blocks");
+      }
       if (auto packedGeneric = dyn_cast<linalg::GenericOp>(
               packed->packedLinalgOp.getOperation());
-          packedGeneric && !repairYield(packedGeneric))
-        return reject(packedGeneric, "packing dropped the linalg.generic yield");
+          packedGeneric) {
+        if (!repairYield(packedGeneric) && snapshot)
+          restoreBody(snapshot, packedGeneric);
+        if (!repairYield(packedGeneric)) {
+          if (snapshot)
+            snapshot->destroy();
+          return reject(packedGeneric,
+                        "packing dropped the linalg.generic yield");
+        }
+      }
+      if (snapshot)
+        snapshot->destroy();
       if (llvm::any_of(packed->packOps, [](linalg::PackOp pack) {
             return !pack.getOuterDimsPerm().empty();
           }))
