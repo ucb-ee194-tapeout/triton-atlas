@@ -649,7 +649,9 @@ struct Emitter {
         llvm::all_of(type.getShape().take_back(tileRank),
                      [](int64_t extent) { return extent == 32; }) &&
         (type.getRank() != 2 || type.getDimSize(0) == 32);
-    if (!tiled)
+    if (!tiled) {
+      if (std::getenv("TTATLAS_TRACE_OPS"))
+        llvm::errs() << "ttatlas constant rejected type=" << type << "\n";
       return reject(op, "a constant tensor that is not one 32x32 tile, one "
                         "32-vector or a grid of 32x32 tiles");
     Tiles result;
