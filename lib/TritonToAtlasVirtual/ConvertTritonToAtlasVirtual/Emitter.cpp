@@ -460,6 +460,13 @@ struct Emitter {
     if (found == tiles.end())
       return reject(op, "an unpack of a value that has no tiles");
     SmallVector<SlotAttr> slots = slotsOf(op);
+    if (slots.empty() && std::getenv("TTATLAS_PLUGIN_RUNTIME")) {
+      // Internal unpack/pack pairs can remain when named-op generalization is
+      // disabled for the Triton wheel.  They only change the tensor view;
+      // output slots are attached to the real store-facing unpack below.
+      tiles[op.getResult()] = found->second;
+      return success();
+    }
     if (slots.size() != found->second.cells.size())
       return reject(op, "the unpack carries " + Twine(slots.size()) +
                             " slots for " + Twine(found->second.cells.size()) +

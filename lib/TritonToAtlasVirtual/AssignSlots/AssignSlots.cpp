@@ -467,8 +467,11 @@ struct Assigner {
       else if (auto s = dyn_cast<StoreOp>(op))
         stores.push_back(s);
     }
-    if (stores.empty())
+    if (stores.empty()) {
+      if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+        return true;
       return reject(unpack, "a linalg.unpack that no tt.store writes");
+    }
     if (stores.size() > 1)
       return reject(unpack, "a stored tile written to two places");
     StoreOp store = stores.front();
