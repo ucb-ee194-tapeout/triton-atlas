@@ -124,6 +124,24 @@ struct Evaluator {
     LaneValues out;
     out.shape = *shape;
 
+    // Read constants by attribute name before the typed wrapper.  In a
+    // Triton wheel/plugin process, arith.ConstantOp's C++ TypeID can differ
+    // even though the operation name and `value` attribute are identical.
+    if (op->getName().getStringRef() == "arith.constant") {
+      Attribute attr = op->getAttr("value");
+      if (auto scalar = dyn_cast_or_null<IntegerAttr>(attr)) {
+        out.values.assign(lanes, wrap(scalar.getValue().getSExtValue(), width));
+        return out;
+      }
+      if (auto dense = dyn_cast_or_null<DenseIntElementsAttr>(attr)) {
+        for (const APInt &v : dense.getValues<APInt>())
+          out.values.push_back(width == 1 ? (v.getZExtValue() & 1)
+                                          : wrap(v.getSExtValue(), width));
+        if (static_cast<int64_t>(out.values.size()) == lanes)
+          return out;
+      }
+    }
+
     // Constants: scalar, splat or non-splat dense.
     if (isa<arith::ConstantOp>(op)) {
       APInt scalar;
