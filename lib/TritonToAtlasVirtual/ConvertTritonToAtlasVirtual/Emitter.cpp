@@ -1305,6 +1305,21 @@ struct Emitter {
           kind = "row_min";
         break;
       }
+      if (kind.empty()) {
+        // The region can survive as an empty block rather than an empty
+        // region after a cross-runtime structured-op clone.  Recover the
+        // supported reducer from its identity in that form as well.
+        FailureOr<unsigned> seed = tile(op, reduceOp.getInits()[0]);
+        if (succeeded(seed) && cells[*seed].kind == Cell::Splat) {
+          if (cells[*seed].bits == kNegInf)
+            kind = "row_max";
+          else if (cells[*seed].bits == kPosInf)
+            kind = "row_min";
+          else if (cells[*seed].bits == kZero ||
+                   cells[*seed].bits == kNegZero)
+            kind = "row_sum";
+        }
+      }
       if (kind.empty() && std::getenv("TTATLAS_TRACE_OPS")) {
         llvm::errs() << "ttatlas reduction combiner:";
         for (Operation &inner : reduceOp.getCombiner().front())
