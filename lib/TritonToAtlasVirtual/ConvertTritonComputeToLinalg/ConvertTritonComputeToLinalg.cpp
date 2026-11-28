@@ -358,9 +358,12 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
     // callback overload is not reliable when this pass is loaded through the
     // Triton Python runtime: its linalg TypeID can differ from the one used by
     // the callback builder, leaving an empty combiner region behind.
-    auto reduce = linalg::ReduceOp::create(
-        rewriter, loc, TypeRange{type}, adaptor.getSrcs(), ValueRange{init},
-        rewriter.getDenseI64ArrayAttr({op.getAxis()}));
+    OperationState state(loc, linalg::ReduceOp::getOperationName());
+    linalg::ReduceOp::build(rewriter, state, TypeRange{type}, adaptor.getSrcs(),
+                            ValueRange{init},
+                            rewriter.getDenseI64ArrayAttr({op.getAxis()}));
+    Operation *reduceOperation = Operation::create(state);
+    auto reduce = cast<linalg::ReduceOp>(reduceOperation);
     Region &combiner = reduce.getCombiner();
     Block *reduceBody =
         combiner.empty() ? &combiner.emplaceBlock() : &combiner.front();
@@ -370,15 +373,16 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
                               loc);
       reduceBody->addArgument(getElementTypeOrSelf(init.getType()), loc);
     }
-    OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToEnd(reduceBody);
+    OpBuilder bodyBuilder(rewriter.getContext());
+    bodyBuilder.setInsertionPointToEnd(reduceBody);
     // linalg.reduce's body takes (element, accumulator); Triton's combine
     // takes the accumulator first.
     IRMapping mapping;
     mapping.map(body.getArgument(0), reduceBody->getArgument(1));
     mapping.map(body.getArgument(1), reduceBody->getArgument(0));
-    Operation *step = rewriter.clone(*combine, mapping);
-    rewriter.create<linalg::YieldOp>(loc, step->getResult(0));
+    Operation *step = bodyBuilder.clone(*combine, mapping);
+    bodyBuilder.create<linalg::YieldOp>(loc, step->getResult(0));
+    rewriter.insert(reduceOperation);
     copyTags(op, reduce);
     rewriter.replaceOp(op, reduce->getResults());
     return success();
