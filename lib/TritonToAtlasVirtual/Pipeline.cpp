@@ -4,12 +4,41 @@
 // its DRAM slots, then converted to Atlas virtual IR.
 #include "TritonToAtlasVirtual/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 
 #include <cstdlib>
 
 namespace mlir::triton {
+
+namespace {
+
+// Triton's Python wheel and this plugin carry separate linalg trait tables.
+// The stock fold-unit-extent pass uses a greedy region simplifier that sees
+// the plugin's generic body with the wheel's TypeID and clears it.  Keep the
+// useful shape rewrite but disable that region simplification in the plugin
+// path; the standalone tool continues to use the stock pass.
+struct FoldUnitExtentDimsCompat
+    : PassWrapper<FoldUnitExtentDimsCompat, OperationPass<ModuleOp>> {
+  StringRef getArgument() const final { return "ttatlas-fold-unit-extents"; }
+  StringRef getDescription() const final {
+    return "fold linalg unit dimensions without cross-image region cleanup";
+  }
+  void runOnOperation() override {
+    RewritePatternSet patterns(&getContext());
+    linalg::ControlDropUnitDims options;
+    linalg::populateFoldUnitExtentDimsPatterns(patterns, options);
+    GreedyRewriteConfig config;
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled);
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns),
+                                     config)))
+      signalPassFailure();
+  }
+};
+
+} // namespace
 
 // canonicalize + CSE after passes 2, 5 and 4, so dead address math and the
 // leftovers of tiling never reach ttatlas-assign-slots. None runs after pass 6:
@@ -53,7 +82,10 @@ void buildLegalizeShapesPipeline(OpPassManager &pm) {
   pm.addPass(createTileGrid()); // 4c
   addTraceCheckpoint(pm);
   addCleanup(pm);
-  pm.addPass(createLinalgFoldUnitExtentDimsPass()); // 4d
+  if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+    pm.addPass(std::make_unique<FoldUnitExtentDimsCompat>());
+  else
+    pm.addPass(createLinalgFoldUnitExtentDimsPass()); // 4d
   addTraceCheckpoint(pm);
   addCleanup(pm);
 }
