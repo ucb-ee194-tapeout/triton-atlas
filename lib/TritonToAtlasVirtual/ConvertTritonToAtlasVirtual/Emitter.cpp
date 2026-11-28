@@ -1188,7 +1188,13 @@ struct Emitter {
     SmallVector<Value> activations, weights;
     for (linalg::MatmulOp step : chain) {
       SmallVector<AffineMap> maps = step.getIndexingMapsArray();
-      bool weightNK = isMap(maps[1], {1, 2});
+      // A named linalg.transpose already materializes the FP8 [n,k] tile via
+      // the XLU. Its matmul map still describes the logical [k,n] view, so
+      // treating the map alone as a request for another XLU would transpose
+      // the weight twice and feed the MXU the original [k,n] tile.
+      bool weightNK =
+          isMap(maps[1], {1, 2}) ||
+          step.getInputs()[1].getDefiningOp<linalg::TransposeOp>();
       if (!isMap(maps[0], {0, 2}) || !(weightNK || isMap(maps[1], {2, 1})) ||
           !isMap(maps[2], {0, 1}))
         return reject(
