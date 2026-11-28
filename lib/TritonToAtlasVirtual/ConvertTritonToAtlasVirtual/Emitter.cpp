@@ -533,6 +533,19 @@ struct Emitter {
     const Tiles &source = found->second;
     if (!op.getSourceType().hasStaticShape() || !op.getType().hasStaticShape())
       return reject(op, "a slice of tiles must be static");
+    if (std::getenv("TTATLAS_TRACE_OPS")) {
+      llvm::errs() << "ttatlas slice source=" << op.getSourceType()
+                   << " result=" << op.getType() << " offsets=";
+      for (int64_t value : op.getStaticOffsets())
+        llvm::errs() << value << ",";
+      llvm::errs() << " sizes=";
+      for (int64_t value : op.getStaticSizes())
+        llvm::errs() << value << ",";
+      llvm::errs() << " strides=";
+      for (int64_t value : op.getStaticStrides())
+        llvm::errs() << value << ",";
+      llvm::errs() << "\n";
+    }
     FailureOr<SmallVector<unsigned>> flat =
         region(op, source, op.getStaticOffsets(), op.getStaticSizes(),
                op.getStaticStrides(), op.getSourceType().getShape());
@@ -643,12 +656,14 @@ struct Emitter {
           return load && load.getOther() == use.get();
         }))
       return success();
-    int64_t tileRank = type.getRank() == 1 ? 1 : 2;
+    bool rowVector = type.getRank() == 2 && type.getDimSize(0) == 1 &&
+                     type.getDimSize(1) == 32;
+    int64_t tileRank = (type.getRank() == 1 || rowVector) ? 1 : 2;
     bool tiled =
         (type.getRank() == 1 || type.getRank() == 2 || type.getRank() == 4) &&
         llvm::all_of(type.getShape().take_back(tileRank),
                      [](int64_t extent) { return extent == 32; }) &&
-        (type.getRank() != 2 || type.getDimSize(0) == 32);
+        (type.getRank() != 2 || type.getDimSize(0) == 32 || rowVector);
     if (!tiled) {
       if (std::getenv("TTATLAS_TRACE_OPS"))
         llvm::errs() << "ttatlas constant rejected type=" << type << "\n";
