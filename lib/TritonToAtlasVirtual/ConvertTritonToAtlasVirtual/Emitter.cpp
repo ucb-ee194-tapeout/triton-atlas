@@ -885,6 +885,7 @@ struct Emitter {
       return reject(op, "a linalg.generic has no recoverable yield");
     if (isClamp(op))
       return clamp(op);
+    unsigned numInputs = op.getNumDpsInputs();
     Operation *compute = nullptr;
     for (Operation &inner : body) {
       if (inner.getName().getStringRef() ==
@@ -900,12 +901,26 @@ struct Emitter {
     if (!yieldOf(body))
       return reject(op, "a linalg.generic has no yield operation");
     auto yield = yieldOf(body);
+    if (!compute && yield.getNumOperands() == 1) {
+      // Pass 5 can erase an identity extf/trunc after retyping, leaving the
+      // structured wrapper with only `linalg.yield %arg`.  It is a tile
+      // passthrough, not an unsupported computation.
+      if (auto argument = dyn_cast<BlockArgument>(yield.getOperand(0));
+          argument && argument.getOwner() == &body &&
+          argument.getArgNumber() < numInputs) {
+        Value input = op.getDpsInputs()[argument.getArgNumber()];
+        auto found = tiles.find(input);
+        if (found != tiles.end()) {
+          tiles[op.getResult(0)] = found->second;
+          return success();
+        }
+      }
+    }
     if (!compute || compute->getNumResults() != 1 ||
         yield.getNumOperands() != 1 ||
         yield.getOperand(0) != compute->getResult(0))
       return reject(op,
                     "a linalg.generic must yield the result of one operation");
-    unsigned numInputs = op.getNumDpsInputs();
     SmallVector<utils::IteratorType> iterators = op.getIteratorTypesArray();
     SmallVector<AffineMap> maps = op.getIndexingMapsArray();
     Fn fn = functionOf(compute);
