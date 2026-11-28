@@ -20,6 +20,9 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <cstdlib>
 
 namespace mlir::triton {
 namespace {
@@ -857,6 +860,12 @@ struct Emitter {
 
   LogicalResult generic(linalg::GenericOp op) {
     Block &body = *op.getBody();
+    if (std::getenv("TTATLAS_TRACE_BODY")) {
+      llvm::errs() << "ttatlas P7 generic body=" << body.size()
+                   << " args=" << body.getNumArguments() << "\n";
+      for (Operation &inner : body)
+        llvm::errs() << "  " << inner.getName().getStringRef() << "\n";
+    }
     if (!repairYield(op))
       return reject(op, "a linalg.generic has no recoverable yield");
     if (isClamp(op))

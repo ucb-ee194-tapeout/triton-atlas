@@ -250,10 +250,32 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
     });
     if (trace)
       llvm::errs() << "ttatlas P4: named=" << named.size() << "\n";
+    if (std::getenv("TTATLAS_TRACE_BODY")) {
+      for (linalg::LinalgOp op : named)
+        llvm::errs() << "ttatlas P4 named " << op->getName().getStringRef()
+                     << "\n";
+      module.walk([&](linalg::GenericOp op) {
+        llvm::errs() << "ttatlas P4 pre-generalize generic body="
+                     << op.getBody()->size() << " args="
+                     << op.getBody()->getNumArguments() << "\n";
+        for (Operation &inner : *op.getBody())
+          llvm::errs() << "  " << inner.getName().getStringRef() << "\n";
+      });
+    }
     for (linalg::LinalgOp op : named) {
       rewriter.setInsertionPoint(op);
       if (failed(linalg::generalizeNamedOp(rewriter, op)))
         return reject(op, "cannot generalize this linalg op");
+    }
+
+    if (std::getenv("TTATLAS_TRACE_BODY")) {
+      module.walk([&](linalg::GenericOp op) {
+        llvm::errs() << "ttatlas P4 post-generalize generic body="
+                     << op.getBody()->size() << " args="
+                     << op.getBody()->getNumArguments() << "\n";
+        for (Operation &inner : *op.getBody())
+          llvm::errs() << "  " << inner.getName().getStringRef() << "\n";
+      });
     }
 
     foldLoadTransposes(rewriter, module);

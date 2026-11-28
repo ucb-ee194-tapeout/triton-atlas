@@ -691,6 +691,17 @@ struct ConvertTritonComputeToLinalg
     hoistTags(getOperation());
     if (printTrace)
       llvm::errs() << "ttatlas P3: done\n";
+    if (std::getenv("TTATLAS_TRACE_BODY")) {
+      getOperation()->walk([&](linalg::GenericOp generic) {
+        Block &body = *generic.getBody();
+        llvm::errs() << "ttatlas P3 generic inputs="
+                     << generic.getNumDpsInputs() << " outputs="
+                     << generic.getNumDpsInits() << " body=" << body.size()
+                     << " args=" << body.getNumArguments() << "\n";
+        for (Operation &inner : body)
+          llvm::errs() << "  " << inner.getName().getStringRef() << "\n";
+      });
+    }
     if (printTrace)
       getOperation()->print(llvm::errs());
     else
