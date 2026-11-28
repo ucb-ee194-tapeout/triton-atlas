@@ -3,6 +3,7 @@
 // the K steps through the accumulator) and every loop is unrolled, so each op
 // is one tile and program order gives a legal schedule.
 #include "TritonToAtlasVirtual/Passes.h"
+#include "TTAtlas/AtlasTarget.h"
 
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -22,6 +23,8 @@ namespace mlir::triton {
 
 namespace {
 
+constexpr int64_t kTile = ttatlas::target::kTileSize;
+
 struct TileGrid : impl::TileGridBase<TileGrid> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -31,6 +34,16 @@ struct TileGrid : impl::TileGridBase<TileGrid> {
     for (linalg::LinalgOp op : ops) {
       // A packed op has the grid loops first and the 32x32 block loops after.
       SmallVector<int64_t> ranges = op.getStaticLoopRanges();
+      // Named matmul/reduce operations are already single-tile kernels in the
+      // small-model path. Tiling their 32-wide output loop creates one
+      // one-row operation per row, which both explodes the schedule and loses
+      // the matrix/vector orientation expected by Atlas. Larger operations
+      // still take the normal grid-tiling path below.
+      if (isa<linalg::MatmulOp, linalg::ReduceOp>(op) &&
+          llvm::all_of(ranges, [](int64_t range) {
+            return range > 0 && range <= kTile;
+          }))
+        continue;
       SmallVector<OpFoldResult> sizes;
       bool tiled = false;
       for (auto [loop, range] : llvm::enumerate(ranges)) {
