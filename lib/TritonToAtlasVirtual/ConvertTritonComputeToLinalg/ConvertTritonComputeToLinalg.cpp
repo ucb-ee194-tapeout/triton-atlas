@@ -354,19 +354,31 @@ struct ReduceToLinalg : OpConversionPattern<ReduceOp> {
     Value init = makeFill(rewriter, loc, start,
                           emptyLike(rewriter, loc, type))
                      .result();
+    // Use the result-type builder and populate the combiner explicitly.  The
+    // callback overload is not reliable when this pass is loaded through the
+    // Triton Python runtime: its linalg TypeID can differ from the one used by
+    // the callback builder, leaving an empty combiner region behind.
     auto reduce = linalg::ReduceOp::create(
-        rewriter, loc, adaptor.getSrcs(), ValueRange{init},
-        SmallVector<int64_t>{op.getAxis()},
-        [&](OpBuilder &builder, Location bodyLoc, ValueRange blockArgs) {
-          // linalg.reduce's body takes (element, accumulator); Triton's
-          // combine takes the accumulator first.
-          clearImplicitYield(builder.getInsertionBlock());
-          IRMapping mapping;
-          mapping.map(body.getArgument(0), blockArgs[1]);
-          mapping.map(body.getArgument(1), blockArgs[0]);
-          Operation *step = builder.clone(*combine, mapping);
-          linalg::YieldOp::create(builder, bodyLoc, step->getResult(0));
-        });
+        rewriter, loc, TypeRange{type}, adaptor.getSrcs(), ValueRange{init},
+        rewriter.getDenseI64ArrayAttr({op.getAxis()}));
+    Region &combiner = reduce.getCombiner();
+    Block *reduceBody =
+        combiner.empty() ? &combiner.emplaceBlock() : &combiner.front();
+    clearImplicitYield(reduceBody);
+    if (reduceBody->getNumArguments() == 0) {
+      reduceBody->addArgument(getElementTypeOrSelf(adaptor.getSrcs()[0].getType()),
+                              loc);
+      reduceBody->addArgument(getElementTypeOrSelf(init.getType()), loc);
+    }
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToEnd(reduceBody);
+    // linalg.reduce's body takes (element, accumulator); Triton's combine
+    // takes the accumulator first.
+    IRMapping mapping;
+    mapping.map(body.getArgument(0), reduceBody->getArgument(1));
+    mapping.map(body.getArgument(1), reduceBody->getArgument(0));
+    Operation *step = rewriter.clone(*combine, mapping);
+    rewriter.create<linalg::YieldOp>(loc, step->getResult(0));
     copyTags(op, reduce);
     rewriter.replaceOp(op, reduce->getResults());
     return success();

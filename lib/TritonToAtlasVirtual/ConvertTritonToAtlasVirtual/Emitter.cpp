@@ -630,6 +630,15 @@ struct Emitter {
       tiles[op.getResult()] = src->second;
       return success();
     }
+    if (src->second.cells.size() == 1 && result.cells.size() == 1 &&
+        llvm::any_of(op.getStaticOffsets(), ShapedType::isDynamic)) {
+      // A subsequent dynamic insert can target the one-cell view produced by
+      // the previous insert rather than the original tensor.empty.  After
+      // unit-dimension folding it is still the same tile update.
+      result.cells[0] = src->second.cells[0];
+      tiles[op.getResult()] = result;
+      return success();
+    }
     FailureOr<SmallVector<unsigned>> flat =
         region(op, result, op.getStaticOffsets(), op.getStaticSizes(),
                op.getStaticStrides(), op.getDestType().getShape());
