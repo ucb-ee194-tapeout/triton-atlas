@@ -256,7 +256,7 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
                      << "\n";
       module.walk([&](linalg::GenericOp op) {
         llvm::errs() << "ttatlas P4 pre-generalize generic body="
-                     << op.getBody()->size() << " args="
+                     << llvm::distance(*op.getBody()) << " args="
                      << op.getBody()->getNumArguments() << "\n";
         for (Operation &inner : *op.getBody())
           llvm::errs() << "  " << inner.getName().getStringRef() << "\n";
@@ -271,7 +271,7 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
     if (std::getenv("TTATLAS_TRACE_BODY")) {
       module.walk([&](linalg::GenericOp op) {
         llvm::errs() << "ttatlas P4 post-generalize generic body="
-                     << op.getBody()->size() << " args="
+                     << llvm::distance(*op.getBody()) << " args="
                      << op.getBody()->getNumArguments() << "\n";
         for (Operation &inner : *op.getBody())
           llvm::errs() << "  " << inner.getName().getStringRef() << "\n";

@@ -696,7 +696,7 @@ struct ConvertTritonComputeToLinalg
         Block &body = *generic.getBody();
         llvm::errs() << "ttatlas P3 generic inputs="
                      << generic.getNumDpsInputs() << " outputs="
-                     << generic.getNumDpsInits() << " body=" << body.size()
+                     << generic.getNumDpsInits() << " body=" << llvm::distance(body)
                      << " args=" << body.getNumArguments() << "\n";
         for (Operation &inner : body)
           llvm::errs() << "  " << inner.getName().getStringRef() << "\n";

@@ -861,7 +861,7 @@ struct Emitter {
   LogicalResult generic(linalg::GenericOp op) {
     Block &body = *op.getBody();
     if (std::getenv("TTATLAS_TRACE_BODY")) {
-      llvm::errs() << "ttatlas P7 generic body=" << body.size()
+      llvm::errs() << "ttatlas P7 generic body=" << llvm::distance(body)
                    << " args=" << body.getNumArguments() << "\n";
       for (Operation &inner : body)
         llvm::errs() << "  " << inner.getName().getStringRef() << "\n";
