@@ -1275,7 +1275,10 @@ struct Emitter {
             reduceOp.getInits().size() != 1 || reduceOp.getNumResults() != 1)
           return reject(op, "pass 7 supports one-input linalg.reduce only");
         FailureOr<unsigned> seed = tile(op, reduceOp.getInits()[0]);
-        if (failed(seed) || cells[*seed].kind != Cell::Splat)
+        if (failed(seed) ||
+            (cells[*seed].kind != Cell::Splat &&
+             cells[*seed].bits != kNegInf && cells[*seed].bits != kPosInf &&
+             cells[*seed].bits != kZero && cells[*seed].bits != kNegZero))
           return reject(op, "pass 7 supports one-input linalg.reduce only");
         StringRef kind;
         if (cells[*seed].bits == kNegInf)
@@ -1319,7 +1322,10 @@ struct Emitter {
                          << " bits=" << llvm::format_hex(cells[*seed].bits, 6);
           llvm::errs() << "\n";
         }
-        if (succeeded(seed) && cells[*seed].kind == Cell::Splat) {
+        if (succeeded(seed) &&
+            (cells[*seed].kind == Cell::Splat ||
+             cells[*seed].bits == kNegInf || cells[*seed].bits == kPosInf ||
+             cells[*seed].bits == kZero || cells[*seed].bits == kNegZero)) {
           if (cells[*seed].bits == kNegInf)
             kind = "row_max";
           else if (cells[*seed].bits == kPosInf)
