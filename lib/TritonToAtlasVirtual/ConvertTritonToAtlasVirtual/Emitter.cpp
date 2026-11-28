@@ -528,8 +528,15 @@ struct Emitter {
 
   LogicalResult extractSlice(tensor::ExtractSliceOp op) {
     auto found = tiles.find(op.getSource());
-    if (found == tiles.end())
+    if (found == tiles.end()) {
+      if (std::getenv("TTATLAS_TRACE_OPS")) {
+        Operation *def = op.getSource().getDefiningOp();
+        llvm::errs() << "ttatlas missing slice source def="
+                     << (def ? def->getName().getStringRef() : "block-arg")
+                     << " type=" << op.getSourceType() << "\n";
+      }
       return reject(op, "a slice of a value that has no tiles");
+    }
     const Tiles &source = found->second;
     if (!op.getSourceType().hasStaticShape() || !op.getType().hasStaticShape())
       return reject(op, "a slice of tiles must be static");
