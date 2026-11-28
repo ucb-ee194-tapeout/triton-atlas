@@ -1127,15 +1127,11 @@ struct Emitter {
     if (!cells[*input].fp8)
       return reject(op, "a transpose of a BF16 tile has no Atlas lowering "
                         "(only FP8 tiles go through the XLU)");
-    FailureOr<Value> value = materialize(op, *input);
-    if (failed(value))
-      return failure();
-    tiles[op->getResult(0)] =
-        single(addCell(ready(make<atlas::VirtualXLUTransposeOp>(
-                                 op->getLoc(), {fp8Type}, {*value})
-                                 .getResult(),
-                             true)),
-               2);
+    // The MXU's weight-buffer read already transposes the pushed tile. A
+    // named linalg.transpose feeding a dot therefore changes logical
+    // indexing but must not emit a physical XLU operation; matmul()
+    // recognizes this defining op and pushes the original FP8 tile directly.
+    tiles[op->getResult(0)] = tiles[op.getInput()];
     return success();
   }
 
