@@ -328,8 +328,24 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
       if (auto packedGeneric = dyn_cast<linalg::GenericOp>(
               packed->packedLinalgOp.getOperation());
           packedGeneric) {
+        if (std::getenv("TTATLAS_TRACE_BODY")) {
+          int64_t snapshotBody = -1;
+          if (snapshot && !snapshot->getRegion(0).empty())
+            snapshotBody = std::distance(snapshot->getRegion(0).front().begin(),
+                                         snapshot->getRegion(0).front().end());
+          llvm::errs() << "ttatlas P4 packed generic pre-repair body="
+                       << std::distance(packedGeneric.getBody()->begin(),
+                                        packedGeneric.getBody()->end())
+                       << " snapshot=" << snapshotBody
+                       << "\n";
+        }
         if (!repairYield(packedGeneric) && snapshot)
           restoreBody(snapshot, packedGeneric);
+        if (std::getenv("TTATLAS_TRACE_BODY"))
+          llvm::errs() << "ttatlas P4 packed generic post-repair body="
+                       << std::distance(packedGeneric.getBody()->begin(),
+                                        packedGeneric.getBody()->end())
+                       << "\n";
         if (!repairYield(packedGeneric)) {
           if (snapshot)
             snapshot->destroy();
