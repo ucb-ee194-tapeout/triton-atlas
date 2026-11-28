@@ -654,6 +654,7 @@ struct Emitter {
         llvm::errs() << "ttatlas constant rejected type=" << type << "\n";
       return reject(op, "a constant tensor that is not one 32x32 tile, one "
                         "32-vector or a grid of 32x32 tiles");
+    }
     Tiles result;
     result.tileRank = tileRank;
     if (type.getRank() == 4)
