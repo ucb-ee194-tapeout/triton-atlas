@@ -9,6 +9,8 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "llvm/Support/JSON.h"
 
+#include <cstdlib>
+
 namespace mlir::triton {
 
 #define GEN_PASS_DEF_CONVERTTRITONTOATLASVIRTUAL
@@ -67,6 +69,8 @@ struct ConvertTritonToAtlasVirtual
       function.walk(
           [&](linalg::GenericOp generic) { generics.push_back(generic); });
       for (linalg::GenericOp generic : generics) {
+        if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+          continue;
         rewriter.setInsertionPoint(generic);
         (void)linalg::specializeGenericOp(
             rewriter, generic); // a generic with no named form stays as it is
