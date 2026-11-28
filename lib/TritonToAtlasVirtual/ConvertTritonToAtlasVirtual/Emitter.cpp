@@ -553,7 +553,11 @@ struct Emitter {
         (resultShape.size() == 1 && resultShape[0] == 32) ||
         (resultShape.size() == 2 &&
          ((resultShape[0] == 1 && resultShape[1] == 32) ||
-          (resultShape[0] == 32 && resultShape[1] == 1)));
+          (resultShape[0] == 32 && resultShape[1] == 1) ||
+          (resultShape[0] == 1 && resultShape[1] > 0 &&
+           resultShape[1] <= 32) ||
+          (resultShape[1] == 1 && resultShape[0] > 0 &&
+           resultShape[0] <= 32)));
     bool oneCell = source.cells.size() == 1 &&
                    llvm::all_of(source.grid, [](int64_t extent) {
                      return extent == 1;
@@ -1091,14 +1095,22 @@ struct Emitter {
     VectorLayout wanted =
         dimensions[0] == 1 ? VectorLayout::rows : VectorLayout::cols;
     Cell cell = cells[*input];
-    if (!cell.anyLayout && cell.layout != wanted)
-      return reject(
-          op,
-          "the broadcast needs the vector in the other layout (one value per " +
-              Twine(wanted == VectorLayout::rows ? "row" : "column") +
-              ") than the one it has; pass 6 records the layout of loaded "
-              "vectors and a row reduction gives "
-              "one value per row");
+    if (!cell.anyLayout && cell.layout != wanted) {
+      // A direct vector load has no intrinsic row/column orientation; its
+      // first consumer supplies that meaning. Pass 6 can miss this demand
+      // when the broadcast is hidden behind expand_dims, so retag pending
+      // input cells here. Computed vectors (especially reductions) must keep
+      // their recorded orientation because retagging those changes results.
+      if (cell.kind == Cell::Pending)
+        cell.layout = wanted;
+      else
+        return reject(
+            op,
+            "the broadcast needs the vector in the other layout (one value per " +
+                Twine(wanted == VectorLayout::rows ? "row" : "column") +
+                ") than the one it has; pass 6 records the layout of loaded "
+                "vectors and a row reduction gives one value per row");
+    }
     cell.layout = VectorLayout::none;
     cell.anyLayout = false;
     cell.reduction = {};
