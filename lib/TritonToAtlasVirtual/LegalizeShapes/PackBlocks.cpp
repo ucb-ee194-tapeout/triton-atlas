@@ -244,6 +244,8 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
     for (linalg::GenericOp op : generics) {
       if (op.getNumLoops() == 0)
         continue;
+      if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+        continue;
       // A contraction's K padding is the pack's zero, which only holds when
       // the host wrote that zero: operands that are loads.
       bool paddedK = false;
