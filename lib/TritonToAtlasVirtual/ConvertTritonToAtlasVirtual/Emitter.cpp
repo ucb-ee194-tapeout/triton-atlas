@@ -613,6 +613,14 @@ struct Emitter {
     } else {
       return reject(op, "an insert into a value that has no tiles");
     }
+    if (std::getenv("TTATLAS_TRACE_OPS") &&
+        llvm::any_of(op.getStaticOffsets(), ShapedType::isDynamic)) {
+      llvm::errs() << "ttatlas dynamic insert source=" << op.getSourceType()
+                   << " dest=" << op.getDestType() << " source_cells="
+                   << src->second.cells.size() << " dest_empty="
+                   << (op.getDest().getDefiningOp<tensor::EmptyOp>() != nullptr)
+                   << "\n";
+    }
     if (src->second.cells.size() == 1 &&
         llvm::any_of(op.getStaticOffsets(), ShapedType::isDynamic) &&
         op.getDest().getDefiningOp<tensor::EmptyOp>()) {
@@ -1261,6 +1269,12 @@ struct Emitter {
         else if (isa<arith::MinNumFOp, arith::MinimumFOp>(&inner))
           kind = "row_min";
         break;
+      }
+      if (kind.empty() && std::getenv("TTATLAS_TRACE_OPS")) {
+        llvm::errs() << "ttatlas reduction combiner:";
+        for (Operation &inner : reduceOp.getCombiner().front())
+          llvm::errs() << " " << inner.getName().getStringRef();
+        llvm::errs() << "\n";
       }
       if (kind.empty())
         return reject(op, "pass 7 has no Atlas reduction combiner");
