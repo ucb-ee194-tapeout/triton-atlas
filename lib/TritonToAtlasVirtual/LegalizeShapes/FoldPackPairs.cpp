@@ -40,6 +40,14 @@ struct FoldUnpackPack : OpRewritePattern<linalg::PackOp> {
 
 struct FoldPackPairs : impl::FoldPackPairsBase<FoldPackPairs> {
   void runOnOperation() override {
+    // The MLIR linked into Triton's Python wheel has a different linalg
+    // region trait TypeID from the plugin's linalg dialect.  Running the
+    // greedy pack(unpack) fold there can erase the body of every generic as
+    // it replaces the pair.  Keep the pair in the plugin runtime; emission
+    // already handles the boundary ops and the standalone tool still gets
+    // the intended fold.
+    if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+      return;
     RewritePatternSet patterns(&getContext());
     patterns.add<FoldUnpackPack>(&getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
