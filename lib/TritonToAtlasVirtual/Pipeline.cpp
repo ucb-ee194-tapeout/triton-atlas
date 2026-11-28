@@ -53,12 +53,7 @@ void buildLegalizeShapesPipeline(OpPassManager &pm) {
   pm.addPass(createTileGrid()); // 4c
   addTraceCheckpoint(pm);
   addCleanup(pm);
-  // This upstream region rewrite has the same cross-image linalg trait issue
-  // as the greedy cleanup when loaded by Triton's Python wheel.  The plugin
-  // kernels are already packed/tiled to fixed 32x32 blocks, so retaining a
-  // unit grid dimension is harmless and keeps their structured bodies intact.
-  if (!std::getenv("TTATLAS_PLUGIN_RUNTIME"))
-    pm.addPass(createLinalgFoldUnitExtentDimsPass()); // 4d
+  pm.addPass(createLinalgFoldUnitExtentDimsPass()); // 4d
   addTraceCheckpoint(pm);
   addCleanup(pm);
 }
