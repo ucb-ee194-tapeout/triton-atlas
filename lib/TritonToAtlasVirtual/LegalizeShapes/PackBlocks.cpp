@@ -265,6 +265,8 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
       });
     }
     for (linalg::LinalgOp op : named) {
+      if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+        continue;
       rewriter.setInsertionPoint(op);
       if (failed(linalg::generalizeNamedOp(rewriter, op)))
         return reject(op, "cannot generalize this linalg op");
