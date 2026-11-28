@@ -613,6 +613,15 @@ struct Emitter {
     } else {
       return reject(op, "an insert into a value that has no tiles");
     }
+    if (src->second.cells.size() == 1 &&
+        llvm::any_of(op.getStaticOffsets(), ShapedType::isDynamic) &&
+        op.getDest().getDefiningOp<tensor::EmptyOp>()) {
+      // The unit-dimension fold may leave a dynamic-zero insert into the
+      // one-tile output allocation.  It is a view update, so retain the
+      // source cell and let the following unpack attach the store slot.
+      tiles[op.getResult()] = src->second;
+      return success();
+    }
     FailureOr<SmallVector<unsigned>> flat =
         region(op, result, op.getStaticOffsets(), op.getStaticSizes(),
                op.getStaticStrides(), op.getDestType().getShape());
@@ -1235,6 +1244,30 @@ struct Emitter {
       return pack(packOp);
     if (auto unpackOp = dyn_cast<linalg::UnPackOp>(op))
       return unpack(unpackOp);
+    if (auto reduceOp = dyn_cast<linalg::ReduceOp>(op)) {
+      if (reduceOp.getInputs().size() != 1 ||
+          reduceOp.getInits().size() != 1 || reduceOp.getNumResults() != 1 ||
+          reduceOp.getCombiner().empty())
+        return reject(op, "pass 7 supports one-input linalg.reduce only");
+      StringRef kind;
+      for (Operation &inner : reduceOp.getCombiner().front()) {
+        if (inner.getName().getStringRef() ==
+            linalg::YieldOp::getOperationName())
+          continue;
+        if (isa<arith::AddFOp>(&inner))
+          kind = "row_sum";
+        else if (isa<arith::MaxNumFOp, arith::MaximumFOp>(&inner))
+          kind = "row_max";
+        else if (isa<arith::MinNumFOp, arith::MinimumFOp>(&inner))
+          kind = "row_min";
+        break;
+      }
+      if (kind.empty())
+        return reject(op, "pass 7 has no Atlas reduction combiner");
+      return reduction(op, kind, *reduceOp.getInputs().begin(),
+                       *reduceOp.getInits().begin(),
+                       reduceOp.getResult(0));
+    }
     if (auto slice = dyn_cast<tensor::ExtractSliceOp>(op))
       return extractSlice(slice);
     if (auto slice = dyn_cast<tensor::InsertSliceOp>(op))
