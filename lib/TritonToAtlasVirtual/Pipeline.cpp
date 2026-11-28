@@ -37,6 +37,16 @@ struct FoldUnitExtentDimsCompat
     getOperation()->walk([&](linalg::GenericOp op) {
       snapshots.push_back(op->clone());
     });
+    if (std::getenv("TTATLAS_TRACE_BODY")) {
+      llvm::errs() << "ttatlas compat snapshots=" << snapshots.size() << "\n";
+      for (Operation *snapshot : snapshots) {
+        int64_t body = snapshot->getRegion(0).empty()
+                           ? -1
+                           : std::distance(snapshot->getRegion(0).front().begin(),
+                                           snapshot->getRegion(0).front().end());
+        llvm::errs() << "  snapshot body=" << body << "\n";
+      }
+    }
     RewritePatternSet patterns(&getContext());
     linalg::ControlDropUnitDims options;
     linalg::populateFoldUnitExtentDimsPatterns(patterns, options);
@@ -48,6 +58,8 @@ struct FoldUnitExtentDimsCompat
     SmallVector<linalg::GenericOp> generics;
     getOperation()->walk(
         [&](linalg::GenericOp op) { generics.push_back(op); });
+    if (std::getenv("TTATLAS_TRACE_BODY"))
+      llvm::errs() << "ttatlas compat generics=" << generics.size() << "\n";
     if (generics.size() == snapshots.size()) {
       for (auto [generic, snapshot] : llvm::zip(generics, snapshots)) {
         if (snapshot->getRegion(0).empty() || generic.getRegion().empty()) {
