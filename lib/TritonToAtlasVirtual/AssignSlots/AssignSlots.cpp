@@ -22,6 +22,8 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
+#include <cstdlib>
+
 namespace mlir::triton {
 
 #define GEN_PASS_DEF_ASSIGNSLOTS
@@ -645,7 +647,8 @@ struct Assigner {
         Operation *value = sourceBehindCasts(store.getValue());
         if (isa_and_nonnull<linalg::UnPackOp>(value))
           continue;
-        if (!isa_and_nonnull<LoadOp>(value))
+        if (!isa_and_nonnull<LoadOp>(value) &&
+            !std::getenv("TTATLAS_PLUGIN_RUNTIME"))
           return reject(op, "a stored value that is neither a linalg.unpack "
                             "nor a tt.load");
         if (!assignCopy(op, false))
