@@ -46,8 +46,28 @@ struct FoldPackPairs : impl::FoldPackPairsBase<FoldPackPairs> {
     // it replaces the pair.  Keep the pair in the plugin runtime; emission
     // already handles the boundary ops and the standalone tool still gets
     // the intended fold.
-    if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+    if (std::getenv("TTATLAS_PLUGIN_RUNTIME")) {
+      // Do the same rewrite directly.  applyPatternsGreedily invokes the
+      // linalg region simplifier from the host wheel; its GenericOp trait is
+      // not the plugin's trait and that simplifier drops generic bodies.
+      // Replacing only the boundary values avoids that cross-DSO path.
+      SmallVector<linalg::PackOp> packs;
+      getOperation()->walk(
+          [&](linalg::PackOp pack) { packs.push_back(pack); });
+      for (linalg::PackOp pack : packs) {
+        auto unpack = pack.getSource().getDefiningOp<linalg::UnPackOp>();
+        if (!unpack || unpack.getSource().getType() != pack.getDestType() ||
+            unpack.getInnerDimsPos() != pack.getInnerDimsPos() ||
+            unpack.getOuterDimsPerm() != pack.getOuterDimsPerm() ||
+            unpack.getMixedTiles() != pack.getMixedTiles())
+          continue;
+        pack.getResult().replaceAllUsesWith(unpack.getSource());
+        pack.erase();
+        if (unpack->use_empty())
+          unpack.erase();
+      }
       return;
+    }
     RewritePatternSet patterns(&getContext());
     patterns.add<FoldUnpackPack>(&getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
