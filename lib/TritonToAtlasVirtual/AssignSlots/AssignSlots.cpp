@@ -356,6 +356,18 @@ struct Assigner {
       op->setAttr(ttatlas::kSlot, ArrayAttr::get(op->getContext(), slots));
   }
 
+  VectorLayout layoutForUse(OpOperand &use) const {
+    if (auto broadcast = dyn_cast<linalg::BroadcastOp>(use.getOwner())) {
+      // Adding output dimension 0 makes a column vector; adding dimension 1
+      // makes a row vector. This direct demand remains visible even when the
+      // vector reached the broadcast through a packed view.
+      if (broadcast.getDimensions().size() == 1)
+        return broadcast.getDimensions()[0] == 0 ? VectorLayout::cols
+                                                 : VectorLayout::rows;
+    }
+    return layouts.ofUse(use);
+  }
+
   // A loaded vector read as rows by some readers and as columns by others
   // needs two slots (the host writes it once per layout). The pack and the
   // tile ops of the readers of each extra layout are cloned; the readers move
@@ -370,7 +382,7 @@ struct Assigner {
     for (PackTile tile : tiles) {
       DenseMap<unsigned, SmallVector<OpOperand *>> moved;
       for (OpOperand &use : tile.op->getResult(0).getUses()) {
-        VectorLayout wanted = layouts.ofUse(use);
+        VectorLayout wanted = layoutForUse(use);
         first = first.value_or(wanted);
         if (wanted != *first)
           moved[unsigned(wanted)].push_back(&use);
@@ -432,7 +444,7 @@ struct Assigner {
       if (access.vector())
         for (OpOperand &use : tile.op->getResult(0).getUses()) {
           if (!layoutSet)
-            layout = layouts.ofUse(use);
+            layout = layoutForUse(use);
           layoutSet = true;
         }
     }
