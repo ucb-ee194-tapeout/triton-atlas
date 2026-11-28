@@ -575,6 +575,12 @@ struct Emitter {
   LogicalResult reshape(Operation *op, Value input, Value output) {
     auto found = tiles.find(input);
     if (found == tiles.end()) {
+      // The unit-dimension compatibility pass can reshape the destination
+      // tensor.empty used by linalg.pack/unpack.  It is only an allocation
+      // shape helper, not a data tile, so there is deliberately no tile entry
+      // to propagate here.
+      if (input.getDefiningOp<tensor::EmptyOp>())
+        return success();
       if (std::getenv("TTATLAS_TRACE_OPS")) {
         Operation *def = input.getDefiningOp();
         llvm::errs() << "ttatlas P7 missing reshape input def="
