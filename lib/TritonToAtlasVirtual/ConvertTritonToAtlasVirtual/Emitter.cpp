@@ -1171,8 +1171,9 @@ struct Emitter {
       if (failed(id))
         return failure();
       if (cells[*id].kind != Cell::ChainMid) {
-        if (cells[*id].kind != Cell::Splat ||
-            (cells[*id].bits != kZero && cells[*id].bits != kNegZero))
+        // A zero fill can become a typed ready cell when the mixed-runtime
+        // linalg clone preserves the value but not the fill's Cell kind.
+        if (cells[*id].bits != kZero && cells[*id].bits != kNegZero)
           return reject(op, "a matmul's accumulator must be a zero fill or the "
                             "previous matmul of the same K chain");
         break;
