@@ -16,6 +16,7 @@
 #include "llvm/ADT/STLExtras.h"
 
 #include <cstdlib>
+#include <iterator>
 
 namespace mlir::triton {
 
@@ -256,7 +257,8 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
                      << "\n";
       module.walk([&](linalg::GenericOp op) {
         llvm::errs() << "ttatlas P4 pre-generalize generic body="
-                     << llvm::distance(*op.getBody()) << " args="
+                     << std::distance(op.getBody()->begin(), op.getBody()->end())
+                     << " args="
                      << op.getBody()->getNumArguments() << "\n";
         for (Operation &inner : *op.getBody())
           llvm::errs() << "  " << inner.getName().getStringRef() << "\n";
@@ -271,7 +273,8 @@ struct PackBlocks : impl::PackBlocksBase<PackBlocks> {
     if (std::getenv("TTATLAS_TRACE_BODY")) {
       module.walk([&](linalg::GenericOp op) {
         llvm::errs() << "ttatlas P4 post-generalize generic body="
-                     << llvm::distance(*op.getBody()) << " args="
+                     << std::distance(op.getBody()->begin(), op.getBody()->end())
+                     << " args="
                      << op.getBody()->getNumArguments() << "\n";
         for (Operation &inner : *op.getBody())
           llvm::errs() << "  " << inner.getName().getStringRef() << "\n";

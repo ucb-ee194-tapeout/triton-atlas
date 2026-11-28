@@ -18,6 +18,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
+#include <iterator>
 
 namespace mlir::triton {
 
@@ -696,7 +697,8 @@ struct ConvertTritonComputeToLinalg
         Block &body = *generic.getBody();
         llvm::errs() << "ttatlas P3 generic inputs="
                      << generic.getNumDpsInputs() << " outputs="
-                     << generic.getNumDpsInits() << " body=" << llvm::distance(body)
+                     << generic.getNumDpsInits() << " body="
+                     << std::distance(body.begin(), body.end())
                      << " args=" << body.getNumArguments() << "\n";
         for (Operation &inner : body)
           llvm::errs() << "  " << inner.getName().getStringRef() << "\n";

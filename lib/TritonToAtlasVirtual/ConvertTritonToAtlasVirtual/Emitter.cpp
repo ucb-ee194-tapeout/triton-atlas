@@ -23,6 +23,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
+#include <iterator>
 
 namespace mlir::triton {
 namespace {
@@ -861,7 +862,8 @@ struct Emitter {
   LogicalResult generic(linalg::GenericOp op) {
     Block &body = *op.getBody();
     if (std::getenv("TTATLAS_TRACE_BODY")) {
-      llvm::errs() << "ttatlas P7 generic body=" << llvm::distance(body)
+      llvm::errs() << "ttatlas P7 generic body="
+                   << std::distance(body.begin(), body.end())
                    << " args=" << body.getNumArguments() << "\n";
       for (Operation &inner : body)
         llvm::errs() << "  " << inner.getName().getStringRef() << "\n";
