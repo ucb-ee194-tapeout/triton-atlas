@@ -780,9 +780,9 @@ struct Emitter {
     uint16_t identity = kind == "row_max"   ? kNegInf
                         : kind == "row_min" ? kPosInf
                                             : kZero;
-    if (seed.kind == Cell::Splat &&
-        (seed.bits == identity ||
-         (kind == "row_sum" && seed.bits == kNegZero))) {
+    if (seed.bits == identity ||
+        (kind == "row_sum" &&
+         (seed.bits == kZero || seed.bits == kNegZero))) {
       // An identity start is dropped: the virtual reduction takes none.
     } else if (seed.kind == Cell::Ready && seed.reduction == kind) {
       // A row spanning several tiles: the partial result passes through the
