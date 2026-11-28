@@ -12,8 +12,10 @@
 #include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 
 namespace mlir::triton {
@@ -68,6 +70,11 @@ struct Evaluator {
     }
     auto result = compute(value);
     --depth;
+    if (!result && std::getenv("TTATLAS_TRACE_POINTER")) {
+      if (Operation *op = value.getDefiningOp())
+        llvm::errs() << "ttatlas pointer eval failed: "
+                     << op->getName().getStringRef() << "\n";
+    }
     memo[value] = result;
     return result;
   }
@@ -382,8 +389,11 @@ std::optional<PointerLanes> pointerOf(Value value, Evaluator &ev,
   if (auto add = dyn_cast<AddPtrOp>(op)) {
     auto base = pointerOf(add.getPtr(), ev, depth + 1);
     auto offset = ev.eval(add.getOffset());
-    if (!base || !offset)
+    if (!base || !offset) {
+      if (std::getenv("TTATLAS_TRACE_POINTER"))
+        llvm::errs() << "ttatlas pointer addptr failed (typed)\n";
       return std::nullopt;
+    }
     // Operands may be a scalar pointer plus a tensor offset (not valid TTIR) or
     // matching shapes; accept equal lane counts or a single-lane side.
     PointerLanes out{base->base, LaneValues{*shape, {}}};
@@ -420,8 +430,11 @@ std::optional<PointerLanes> pointerOf(Value value, Evaluator &ev,
   if (name == "tt.addptr") {
     auto base = pointerOf(op->getOperand(0), ev, depth + 1);
     auto offset = ev.eval(op->getOperand(1));
-    if (!base || !offset)
+    if (!base || !offset) {
+      if (std::getenv("TTATLAS_TRACE_POINTER"))
+        llvm::errs() << "ttatlas pointer addptr failed (name)\n";
       return std::nullopt;
+    }
     PointerLanes out{base->base, LaneValues{*shape, {}}};
     for (int64_t i = 0; i < lanes; ++i) {
       int64_t b = base->offsets.values[base->offsets.values.size() == 1
