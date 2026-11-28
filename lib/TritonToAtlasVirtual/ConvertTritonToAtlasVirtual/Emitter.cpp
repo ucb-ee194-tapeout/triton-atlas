@@ -21,6 +21,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Format.h"
 
 #include <cstdlib>
 #include <iterator>
@@ -1310,6 +1311,14 @@ struct Emitter {
         // region after a cross-runtime structured-op clone.  Recover the
         // supported reducer from its identity in that form as well.
         FailureOr<unsigned> seed = tile(op, reduceOp.getInits()[0]);
+        if (std::getenv("TTATLAS_TRACE_OPS")) {
+          llvm::errs() << "ttatlas reduction identity seed="
+                       << (failed(seed) ? -1 : static_cast<int>(*seed));
+          if (succeeded(seed))
+            llvm::errs() << " kind=" << cells[*seed].kind
+                         << " bits=" << llvm::format_hex(cells[*seed].bits, 6);
+          llvm::errs() << "\n";
+        }
         if (succeeded(seed) && cells[*seed].kind == Cell::Splat) {
           if (cells[*seed].bits == kNegInf)
             kind = "row_max";
