@@ -1264,7 +1264,33 @@ struct Emitter {
     if (auto reduceOp = dyn_cast<linalg::ReduceOp>(op)) {
       if (reduceOp.getInputs().size() != 1 ||
           reduceOp.getInits().size() != 1 || reduceOp.getNumResults() != 1 ||
-          reduceOp.getCombiner().empty())
+          reduceOp.getCombiner().empty()) {
+        // Some Triton/MLIR mixed-runtime paths preserve the reduce shell but
+        // drop its combiner region while cloning structured ops.  The Atlas
+        // reducer's supported identities are unambiguous, so recover the
+        // operation kind from the initialized accumulator instead of losing
+        // an otherwise valid kernel.
+        if (reduceOp.getInputs().size() != 1 ||
+            reduceOp.getInits().size() != 1 || reduceOp.getNumResults() != 1)
+          return reject(op, "pass 7 supports one-input linalg.reduce only");
+        FailureOr<unsigned> seed = tile(op, reduceOp.getInits()[0]);
+        if (failed(seed) || cells[*seed].kind != Cell::Splat)
+          return reject(op, "pass 7 supports one-input linalg.reduce only");
+        StringRef kind;
+        if (cells[*seed].bits == kNegInf)
+          kind = "row_max";
+        else if (cells[*seed].bits == kPosInf)
+          kind = "row_min";
+        else if (cells[*seed].bits == kZero ||
+                 cells[*seed].bits == kNegZero)
+          kind = "row_sum";
+        if (kind.empty())
+          return reject(op, "pass 7 has no Atlas reduction combiner");
+        return reduction(op, kind, *reduceOp.getInputs().begin(),
+                         *reduceOp.getInits().begin(), reduceOp.getResult(0));
+      }
+      if (reduceOp.getInputs().size() != 1 ||
+          reduceOp.getInits().size() != 1 || reduceOp.getNumResults() != 1)
         return reject(op, "pass 7 supports one-input linalg.reduce only");
       StringRef kind;
       for (Operation &inner : reduceOp.getCombiner().front()) {
