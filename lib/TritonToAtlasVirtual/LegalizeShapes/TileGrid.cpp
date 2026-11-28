@@ -39,7 +39,8 @@ struct TileGrid : impl::TileGridBase<TileGrid> {
       // one-row operation per row, which both explodes the schedule and loses
       // the matrix/vector orientation expected by Atlas. Larger operations
       // still take the normal grid-tiling path below.
-      if (isa<linalg::MatmulOp, linalg::ReduceOp>(op) &&
+      if (isa<linalg::MatmulOp, linalg::ReduceOp, linalg::TransposeOp,
+              linalg::BroadcastOp>(op) &&
           llvm::all_of(ranges, [](int64_t range) {
             return range > 0 && range <= kTile;
           }))
