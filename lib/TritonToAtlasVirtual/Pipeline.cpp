@@ -6,9 +6,11 @@
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
@@ -31,6 +33,10 @@ struct FoldUnitExtentDimsCompat
     return "fold linalg unit dimensions without cross-image region cleanup";
   }
   void runOnOperation() override {
+    SmallVector<Operation *> snapshots;
+    getOperation()->walk([&](linalg::GenericOp op) {
+      snapshots.push_back(op->clone());
+    });
     RewritePatternSet patterns(&getContext());
     linalg::ControlDropUnitDims options;
     linalg::populateFoldUnitExtentDimsPatterns(patterns, options);
@@ -39,6 +45,32 @@ struct FoldUnitExtentDimsCompat
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns),
                                      config)))
       signalPassFailure();
+    SmallVector<linalg::GenericOp> generics;
+    getOperation()->walk(
+        [&](linalg::GenericOp op) { generics.push_back(op); });
+    if (generics.size() == snapshots.size()) {
+      for (auto [generic, snapshot] : llvm::zip(generics, snapshots)) {
+        if (snapshot->getRegion(0).empty() || generic.getRegion().empty()) {
+          continue;
+        }
+        Block &source = snapshot->getRegion(0).front();
+        Block &destination = *generic.getBody();
+        if (source.getNumArguments() != destination.getNumArguments())
+          continue;
+        while (!destination.empty())
+          destination.back().erase();
+        IRMapping mapping;
+        for (auto [from, to] : llvm::zip(source.getArguments(),
+                                         destination.getArguments()))
+          mapping.map(from, to);
+        OpBuilder builder(generic.getContext());
+        builder.setInsertionPointToEnd(&destination);
+        for (Operation &inner : source)
+          builder.clone(inner, mapping);
+      }
+    }
+    for (Operation *snapshot : snapshots)
+      snapshot->destroy();
     if (std::getenv("TTATLAS_TRACE_OPS")) {
       getOperation()->walk([&](linalg::PackOp pack) {
         llvm::errs() << "ttatlas compat pack result=" << pack.getResult()
