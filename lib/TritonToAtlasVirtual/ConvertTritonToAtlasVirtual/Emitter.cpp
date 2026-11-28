@@ -533,6 +533,25 @@ struct Emitter {
     const Tiles &source = found->second;
     if (!op.getSourceType().hasStaticShape() || !op.getType().hasStaticShape())
       return reject(op, "a slice of tiles must be static");
+    // Unit-extent folding can materialize a rank-2 vector view with a
+    // dynamic zero offset from a single 32x32 tile.  It is still the same
+    // one cell; preserve it as a one-vector view instead of treating the
+    // sentinel offset as a tile-grid coordinate.
+    ArrayRef<int64_t> resultShape = op.getType().getShape();
+    bool vectorView =
+        (resultShape.size() == 1 && resultShape[0] == 32) ||
+        (resultShape.size() == 2 &&
+         ((resultShape[0] == 1 && resultShape[1] == 32) ||
+          (resultShape[0] == 32 && resultShape[1] == 1)));
+    bool oneCell = source.cells.size() == 1 &&
+                   llvm::all_of(source.grid, [](int64_t extent) {
+                     return extent == 1;
+                   });
+    if (vectorView && oneCell &&
+        llvm::any_of(op.getStaticOffsets(), ShapedType::isDynamic)) {
+      tiles[op.getResult()] = Tiles{{1}, source.cells, 1};
+      return success();
+    }
     if (std::getenv("TTATLAS_TRACE_OPS")) {
       llvm::errs() << "ttatlas slice source=" << op.getSourceType()
                    << " result=" << op.getType() << " offsets=";
