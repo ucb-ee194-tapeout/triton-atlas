@@ -529,6 +529,8 @@ struct Emitter {
   LogicalResult extractSlice(tensor::ExtractSliceOp op) {
     auto found = tiles.find(op.getSource());
     if (found == tiles.end()) {
+      if (op.getSource().getDefiningOp<tensor::EmptyOp>())
+        return success();
       if (std::getenv("TTATLAS_TRACE_OPS")) {
         Operation *def = op.getSource().getDefiningOp();
         llvm::errs() << "ttatlas missing slice source def="
@@ -546,6 +548,7 @@ struct Emitter {
     // sentinel offset as a tile-grid coordinate.
     ArrayRef<int64_t> resultShape = op.getType().getShape();
     bool vectorView =
+        (resultShape.size() == 1 && resultShape[0] == 1) ||
         (resultShape.size() == 1 && resultShape[0] == 32) ||
         (resultShape.size() == 2 &&
          ((resultShape[0] == 1 && resultShape[1] == 32) ||
