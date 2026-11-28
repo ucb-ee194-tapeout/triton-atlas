@@ -687,7 +687,11 @@ struct ConvertTritonComputeToLinalg
 
     RewritePatternSet patterns(context);
     patterns.add<DotToMatmul, TransToTranspose, BroadcastToLinalg,
-                 ExpandDimsToExpandShape, SplatToFill, ReduceToLinalg>(context);
+                 ExpandDimsToExpandShape, SplatToFill>(context);
+    // Prefer this explicit combiner construction over Triton's generic
+    // reduce conversion, whose callback can be dropped across the plugin's
+    // linalg TypeID boundary.
+    patterns.add<ReduceToLinalg>(context, /*benefit=*/2);
     // Ahead of upstream's patterns, which would match tt.fp_to_fp too (it is
     // elementwise) and put it, unconverted, into a generic's body.
     patterns.add<FpToFpToArith>(context, /*benefit=*/2);
