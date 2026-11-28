@@ -574,8 +574,15 @@ struct Emitter {
   // A reshape keeps the cells; it may only add or drop grid dims of extent 1.
   LogicalResult reshape(Operation *op, Value input, Value output) {
     auto found = tiles.find(input);
-    if (found == tiles.end())
+    if (found == tiles.end()) {
+      if (std::getenv("TTATLAS_TRACE_OPS")) {
+        Operation *def = input.getDefiningOp();
+        llvm::errs() << "ttatlas P7 missing reshape input def="
+                     << (def ? def->getName().getStringRef() : "block-arg")
+                     << "\n";
+      }
       return reject(op, "a reshape of a value that has no tiles");
+    }
     Tiles result = regrid(found->second, found->second.cells,
                           cast<RankedTensorType>(output.getType()));
     int64_t count = 1;

@@ -5,11 +5,14 @@
 #include "TritonToAtlasVirtual/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
+#include <iterator>
 
 namespace mlir::triton {
 
@@ -36,6 +39,21 @@ struct FoldUnitExtentDimsCompat
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns),
                                      config)))
       signalPassFailure();
+    if (std::getenv("TTATLAS_TRACE_OPS")) {
+      getOperation()->walk([&](linalg::PackOp pack) {
+        llvm::errs() << "ttatlas compat pack result=" << pack.getResult()
+                     << " users="
+                     << std::distance(pack->getResult(0).use_begin(),
+                                      pack->getResult(0).use_end())
+                     << "\n";
+      });
+      getOperation()->walk([&](tensor::CollapseShapeOp collapse) {
+        Operation *def = collapse.getSrc().getDefiningOp();
+        llvm::errs() << "ttatlas compat collapse src="
+                     << (def ? def->getName().getStringRef() : "block-arg")
+                     << "\n";
+      });
+    }
   }
 };
 
