@@ -22,6 +22,7 @@ namespace {
 // path; the standalone tool continues to use the stock pass.
 struct FoldUnitExtentDimsCompat
     : PassWrapper<FoldUnitExtentDimsCompat, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldUnitExtentDimsCompat)
   StringRef getArgument() const final { return "ttatlas-fold-unit-extents"; }
   StringRef getDescription() const final {
     return "fold linalg unit dimensions without cross-image region cleanup";
