@@ -168,6 +168,42 @@ struct Evaluator {
       return out;
     }
 
+    // Triton's Python wheel and this plugin can carry distinct Triton
+    // operation TypeIDs.  Keep the evaluator usable across that boundary by
+    // recognizing the small structural TTIR set by operation name as well.
+    StringRef name = op->getName().getStringRef();
+    if (name == "tt.make_range") {
+      auto start = op->getAttrOfType<IntegerAttr>("start");
+      if (!start)
+        return std::nullopt;
+      for (int64_t i = 0; i < lanes; ++i)
+        out.values.push_back(wrap(start.getInt() + i, width));
+      return out;
+    }
+    if (name == "tt.splat" || name == "tt.expand_dims") {
+      auto src = eval(op->getOperand(0));
+      if (!src)
+        return std::nullopt;
+      if (name == "tt.splat")
+        out.values.assign(lanes, src->values[0]);
+      else
+        out.values = src->values;
+      return out;
+    }
+    if (name == "tt.broadcast") {
+      auto src = eval(op->getOperand(0));
+      if (!src || src->shape.size() != shape->size())
+        return std::nullopt;
+      return broadcastTo(*src, *shape, src->shape);
+    }
+    if (name == "tt.reshape") {
+      auto src = eval(op->getOperand(0));
+      if (!src || count(src->shape) != lanes)
+        return std::nullopt;
+      out.values = src->values;
+      return out;
+    }
+
     // Casts.
     if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::TruncIOp, arith::IndexCastOp,
             arith::IndexCastUIOp>(op)) {
@@ -354,6 +390,43 @@ std::optional<PointerLanes> pointerOf(Value value, Evaluator &ev,
     for (int64_t i = 0; i < lanes; ++i) {
       int64_t b =
           base->offsets.values[base->offsets.values.size() == 1 ? 0 : i];
+      int64_t o = offset->values[offset->values.size() == 1 ? 0 : i];
+      out.offsets.values.push_back(b + o);
+    }
+    return out;
+  }
+  // See the evaluator fallback above: pointer structure can cross a Triton
+  // wheel/plugin TypeID boundary even when the operation names are identical.
+  StringRef name = op->getName().getStringRef();
+  if (name == "tt.splat" || name == "tt.expand_dims" ||
+      name == "tt.broadcast") {
+    auto base = pointerOf(op->getOperand(0), ev, depth + 1);
+    if (!base)
+      return std::nullopt;
+    if (name == "tt.splat")
+      return PointerLanes{base->base,
+                          LaneValues{*shape, Lanes(lanes,
+                                                   base->offsets.values[0])}};
+    if (name == "tt.expand_dims") {
+      base->offsets.shape = *shape;
+      return *base;
+    }
+    if (base->offsets.shape.size() != shape->size())
+      return std::nullopt;
+    return PointerLanes{base->base,
+                        Evaluator::broadcastTo(base->offsets, *shape,
+                                               base->offsets.shape)};
+  }
+  if (name == "tt.addptr") {
+    auto base = pointerOf(op->getOperand(0), ev, depth + 1);
+    auto offset = ev.eval(op->getOperand(1));
+    if (!base || !offset)
+      return std::nullopt;
+    PointerLanes out{base->base, LaneValues{*shape, {}}};
+    for (int64_t i = 0; i < lanes; ++i) {
+      int64_t b = base->offsets.values[base->offsets.values.size() == 1
+                                           ? 0
+                                           : i];
       int64_t o = offset->values[offset->values.size() == 1 ? 0 : i];
       out.offsets.values.push_back(b + o);
     }
