@@ -8,6 +8,11 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
+#include "llvm/Support/raw_ostream.h"
+
+#include <cstdlib>
+#include <iterator>
+
 namespace mlir::triton {
 
 #define GEN_PASS_DEF_FOLDPACKPAIRS
@@ -39,6 +44,12 @@ struct FoldPackPairs : impl::FoldPackPairsBase<FoldPackPairs> {
     patterns.add<FoldUnpackPack>(&getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
+    if (std::getenv("TTATLAS_TRACE_BODY"))
+      getOperation()->walk([&](linalg::GenericOp op) {
+        llvm::errs() << "ttatlas FoldPackPairs generic body="
+                     << std::distance(op.getBody()->begin(), op.getBody()->end())
+                     << "\n";
+      });
   }
 };
 

@@ -21,8 +21,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
+#include <iterator>
 
 namespace mlir::triton {
 
@@ -664,6 +666,12 @@ struct AssignSlots : impl::AssignSlotsBase<AssignSlots> {
       Assigner assigner(func);
       if (!assigner.run())
         return signalPassFailure();
+      if (std::getenv("TTATLAS_TRACE_BODY"))
+        func.walk([&](linalg::GenericOp op) {
+          llvm::errs() << "ttatlas AssignSlots generic body="
+                       << std::distance(op.getBody()->begin(), op.getBody()->end())
+                       << "\n";
+        });
     }
   }
 };

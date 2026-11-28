@@ -10,6 +10,11 @@
 #include "mlir/Dialect/SCF/Utils/Utils.h"
 #include "mlir/Interfaces/TilingInterface.h"
 
+#include "llvm/Support/raw_ostream.h"
+
+#include <cstdlib>
+#include <iterator>
+
 namespace mlir::triton {
 
 #define GEN_PASS_DEF_TILEGRID
@@ -54,6 +59,12 @@ struct TileGrid : impl::TileGridBase<TileGrid> {
         ttatlas::emitUnsupported(loop, "tile loop with no constant trip count");
         return signalPassFailure();
       }
+    if (std::getenv("TTATLAS_TRACE_BODY"))
+      getOperation()->walk([&](linalg::GenericOp op) {
+        llvm::errs() << "ttatlas TileGrid generic body="
+                     << std::distance(op.getBody()->begin(), op.getBody()->end())
+                     << "\n";
+      });
   }
 };
 
