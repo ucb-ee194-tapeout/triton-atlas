@@ -436,14 +436,20 @@ struct Emitter {
     Tiles result{grid, SmallVector<unsigned>(count, kNone), tileRank};
     if (!op.getSource().getDefiningOp<tensor::EmptyOp>()) {
       SmallVector<SlotAttr> slots = slotsOf(op);
-      if (!hostIn.contains(op.getSource()))
-        return reject(op, "a pack of anything but a load (pass 4 folds packs "
-                          "of empty or constant tensors)");
-      if (static_cast<int64_t>(slots.size()) != count)
-        return reject(op, "the pack carries " + Twine(slots.size()) +
-                              " slots for " + Twine(count) + " tiles");
-      for (auto [cell, slot] : llvm::zip(result.cells, slots))
-        cell = addCell(pending(slot));
+      if (hostIn.contains(op.getSource())) {
+        if (static_cast<int64_t>(slots.size()) != count)
+          return reject(op, "the pack carries " + Twine(slots.size()) +
+                                " slots for " + Twine(count) + " tiles");
+        for (auto [cell, slot] : llvm::zip(result.cells, slots))
+          cell = addCell(pending(slot));
+      } else {
+        auto source = tiles.find(op.getSource());
+        if (source == tiles.end())
+          return reject(op, "a pack source has no tiles");
+        if (source->second.cells.size() != result.cells.size())
+          return reject(op, "a computed pack changes the tile count");
+        result.cells = source->second.cells;
+      }
     }
     tiles[op.getResult()] = result;
     return success();

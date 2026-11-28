@@ -395,8 +395,15 @@ struct Assigner {
 
   bool assignInputs(linalg::PackOp pack) {
     auto load = dyn_cast_or_null<LoadOp>(sourceBehindCasts(pack.getSource()));
-    if (!load)
+    if (!load) {
+      // A plugin-runtime pipeline may retain a pack around a named linalg
+      // result because named-op generalization is disabled for the wheel's
+      // incompatible linalg trait table.  It is an internal tile reshape,
+      // not a DRAM boundary, so it intentionally carries no input slots.
+      if (std::getenv("TTATLAS_PLUGIN_RUNTIME"))
+        return true;
       return reject(pack, "a pack of something other than a tt.load");
+    }
     const Access &access = accesses.at(load);
     Type tileDtype = pack.getDestType().getElementType();
     if (!tileDtype.isBF16() && !isa<Float8E4M3FNType>(tileDtype))
